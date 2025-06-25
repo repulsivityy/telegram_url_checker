@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-phishing-bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY}
+      - WEBRISK_API_KEY=${WEBRISK_API_KEY}
+    # Resource limits (optional, adjust / remove as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
