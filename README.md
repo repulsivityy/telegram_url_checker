@@ -30,8 +30,8 @@ You will need three secret keys to run the bot.
 
 Clone the project repository to your local machine or server.
 ```bash
-git clone [https://github.com/your-username/your-repo-name.git](https://github.com/your-username/your-repo-name.git)
-cd your-repo-name
+git clone [https://github.com/repulsivityy/telegram_url_checker.git](https://github.com/repulsivityy/telegram_url_checker.git)
+cd telegram_url_checker
 ```
 
 ## How to Run
