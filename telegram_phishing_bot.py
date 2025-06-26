@@ -49,13 +49,12 @@ WEBRISK_API_KEY = os.environ.get("WEBRISK_API_KEY")
 #####################
 # Constants / Variables. Adjust these as needed.
 #####################
-MALICIOUS_THRESHOLD = 3
+MALICIOUS_THRESHOLD = 4
 API_TIMEOUT = 10
 TOTAL_TIMEOUT = 25
 IDLE_SHUTDOWN_SECONDS = 600
 MAX_CONCURRENT_CHECKS = 20
-VT_POLLING_SCHEDULE = [60, 45, 30] 
-VT_POLLING_DEFAULT_INTERVAL = 30
+VT_POLLING_SCHEDULE = [60, 45, 30, 30] 
 TOTAL_POLLING_TIMEOUT = 240
 
 @dataclass
@@ -73,42 +72,68 @@ class ScanResult:
 # Core Component to extract URLs and domains 
 #####################
 class URLExtractor:
-    """Extracts URLs and domains based on clear classification rules."""
-    DOMAIN_NAME_PATTERN = r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,6}"
-    IPV4_PATTERN = r"(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
-    HOST_PATTERN = f"(?:{DOMAIN_NAME_PATTERN}|{IPV4_PATTERN})"
-    LINK_REGEX = re.compile(
-        r'(?:https?://)?' + HOST_PATTERN + r'(?::\d+)?(?:[/?#][^\s]*)?',
+    """Extracts and classifies URLs, Domains, and IP Addresses from text."""
+    # Pattern for FQDNs (e.g., example.com, sub.example.co.uk)
+    DOMAIN_NAME_PATTERN = r"((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,12})"
+    # Pattern for IPv4 addresses
+    IPV4_PATTERN = r"((?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))"
+    # A simplified but effective pattern for common IPv6 formats
+    IPV6_PATTERN = r"((?:[A-F0-9]{1,4}:){2,7}[A-F0-9]{1,4})|((?:[A-F0-9]{1,4}:){1,7}:)|(:(?::[A-F0-9]{1,4}){1,7})"
+
+    # Regex to find anything that could be a URL, including those with IP addresses
+    URL_REGEX = re.compile(
+        r'(https?://(?:' + DOMAIN_NAME_PATTERN + r'|' + IPV4_PATTERN + r'|\[IPv6_placeholder\])' # Placeholder for IPv6
+        r'(?::\d+)?(?:[/?#][^\s]*)?)',
         re.IGNORECASE
     )
+    # Separate regexes for standalone entities
+    STANDALONE_DOMAIN_REGEX = re.compile(r'\b' + DOMAIN_NAME_PATTERN + r'\b', re.IGNORECASE)
+    STANDALONE_IPV4_REGEX = re.compile(r'\b' + IPV4_PATTERN + r'\b')
+    STANDALONE_IPV6_REGEX = re.compile(r'\b' + IPV6_PATTERN + r'\b', re.IGNORECASE)
 
     @staticmethod
     def extract_urls_and_domains(text: str) -> List[Dict[str, str]]:
-        candidates = URLExtractor.LINK_REGEX.findall(text)
-        final_results = []
+        results = []
         seen = set()
-        for candidate in candidates:
-            if "://" in candidate or "/" in candidate or (":" in candidate and "://" not in candidate):
-                item_type = 'url'
-                value = 'http://' + candidate if not candidate.startswith('http') else candidate
-            else:
-                item_type = 'domain'
-                value = candidate
-            item_tuple = (item_type, value)
-            if item_tuple not in seen:
-                final_results.append({'type': item_type, 'value': value})
-                seen.add(item_tuple)
-        return final_results
+        
+        # 1. Find all full URLs first (the most specific match)
+        # We handle IPv6 separately due to brackets in URLs
+        ipv6_url_pattern = URLExtractor.URL_REGEX.pattern.replace('IPv6_placeholder', r'\[[A-F0-9:a-f]+\]')
+        full_url_regex = re.compile(ipv6_url_pattern)
+
+        for match in full_url_regex.finditer(text):
+            url = match.group(0)
+            if url not in seen:
+                results.append({'type': 'url', 'value': url})
+                seen.add(url)
+        
+        # Create a "remainder" text by removing URLs we already found
+        remainder_text = full_url_regex.sub('', text)
+
+        # 2. Find standalone Domains, IPv4, and IPv6 addresses in the remaining text
+        entity_types = [
+            ('ip_address', URLExtractor.STANDALONE_IPV6_REGEX),
+            ('ip_address', URLExtractor.STANDALONE_IPV4_REGEX),
+            ('domain', URLExtractor.STANDALONE_DOMAIN_REGEX),
+        ]
+        
+        for item_type, regex in entity_types:
+            for match in regex.finditer(remainder_text):
+                # findall returns tuples from capture groups, so we get the first non-empty group
+                value = next((g for g in match.groups() if g), None)
+                if value and value not in seen:
+                    results.append({'type': item_type, 'value': value})
+                    seen.add(value)
+
+        return results
 
 
 class BaseChecker(ABC):
-    """Abstract base class for security checkers."""
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
 
     @abstractmethod
     async def check(self, value: str, item_type: str) -> ScanResult:
-        """Checks a value and returns a standardized ScanResult."""
         pass
 
 #####################
@@ -129,26 +154,19 @@ class VirusTotalChecker(BaseChecker):
     def _parse_results(self, vt_data: Dict) -> ScanResult:
         attributes = vt_data.get("data", {}).get("attributes", {})
         stats = attributes.get("last_analysis_stats", {})
-        if not stats:
-            return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
+        if not stats: return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
         malicious_count = stats.get("malicious", 0) + stats.get("suspicious", 0)
         total_engines = sum(stats.values())
         summary = f"{malicious_count}/{total_engines} vendors flagged this as malicious"
         details = stats.copy()
-        risk_factors = {
-            "classic_score": malicious_count,
-            "is_malicious_threshold": malicious_count >= MALICIOUS_THRESHOLD
-        }
+        risk_factors = {"classic_score": malicious_count, "is_malicious_threshold": malicious_count >= MALICIOUS_THRESHOLD}
         gti_assessment = attributes.get("gti_assessment")
         if gti_assessment:
             gti_verdict = gti_assessment.get("verdict", {}).get("value")
             gti_score = gti_assessment.get("threat_score", {}).get("value")
             is_malicious = gti_verdict == "VERDICT_MALICIOUS"
             details.update(gti_assessment)
-            risk_factors.update({
-                "gti_verdict": gti_verdict,
-                "gti_score": gti_score
-            })
+            risk_factors.update({"gti_verdict": gti_verdict, "gti_score": gti_score})
         else:
             is_malicious = risk_factors["is_malicious_threshold"]
         return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=details, risk_factors=risk_factors)
@@ -203,7 +221,7 @@ class VirusTotalChecker(BaseChecker):
                             return self._parse_results(analysis_data)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.error(f"Polling error for analysis ID {analysis_id}: {e}")
-        logger.warning(f"Polling finished or timed out for analysis ID {analysis_id}.")
+        logger.warning(f"Polling timed out for analysis ID {analysis_id}.")
         return ScanResult(False, "Analysis timed out", self.SOURCE_NAME, error=True)
 
 #####################
@@ -224,10 +242,7 @@ class WebRiskChecker(BaseChecker):
         is_malicious = any(score.get("confidenceLevel") != "SAFE" for score in wr_data.get("scores", []))
         threat_scores = {score.get("threatType"): score.get("confidenceLevel", "SAFE") for score in wr_data.get("scores", [])}
         summary = self._format_threat_summary(threat_scores)
-        risk_factors = {
-            "has_high_threat": any(c in ["HIGH", "EXTREMELY_HIGH"] for c in threat_scores.values()),
-            "is_clean": not is_malicious
-        }
+        risk_factors = {"has_high_threat": any(c in ["HIGH", "EXTREMELY_HIGH"] for c in threat_scores.values()), "is_clean": not is_malicious}
         return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=threat_scores, risk_factors=risk_factors)
 
     def _format_threat_summary(self, threat_scores: Dict) -> str:
@@ -262,13 +277,9 @@ class ResponseFormatter:
         if vt_result.error or wr_result.error: return "ERROR"
         vt_factors = vt_result.risk_factors
         wr_factors = wr_result.risk_factors
-        if (vt_factors.get("gti_verdict") == "VERDICT_MALICIOUS" or
-            (vt_factors.get("gti_score") is not None and vt_factors.get("gti_score") > 60) or
-            wr_factors.get("has_high_threat") or
-            vt_factors.get("is_malicious_threshold")):
+        if (vt_factors.get("gti_verdict") == "VERDICT_MALICIOUS" or (vt_factors.get("gti_score") is not None and vt_factors.get("gti_score") > 60) or wr_factors.get("has_high_threat") or vt_factors.get("is_malicious_threshold")):
             return "DANGER"
-        if (vt_factors.get("gti_verdict") == "VERDICT_HARMLESS" or
-            (vt_factors.get("classic_score") == 0 and wr_factors.get("is_clean"))):
+        if (vt_factors.get("gti_verdict") == "VERDICT_HARMLESS" or (vt_factors.get("classic_score") == 0 and wr_factors.get("is_clean"))):
             return "SAFE"
         return "WARNING"
 
@@ -280,7 +291,6 @@ class ResponseFormatter:
         header = f"{template['emoji']} {template['level']}"
         recommendation = f"<b>Recommendation:</b>\n {template['rec']}"
         defanged_target = target.replace('.', '[.]').replace(':', '[:]')
-        
         details_lines = []
         if vt_result:
             details_lines.append(f"VirusTotal: {vt_result.summary}")
@@ -288,10 +298,8 @@ class ResponseFormatter:
             if gti_verdict_raw:
                 display_verdict = gti_verdict_raw.replace("VERDICT_", "").capitalize()
                 details_lines.append(f"Google TI Verdict: {display_verdict}")
-        
         if wr_result:
             details_lines.append(f"Google Web Risk: {wr_result.summary}")
-
         details_section = "\n".join(filter(None, details_lines))
         pending_text = "\n\n<i>⏳ Awaiting final analysis results from VirusTotal...</i>" if is_pending else ""
         return (f"{header}\n"f"Link: <code>{defanged_target}</code>\n""----------------------------------\n"f"{details_section}\n\n"f"{recommendation}{pending_text}")
@@ -360,24 +368,33 @@ class TelegramBot:
         if not checkers:
             await update.message.reply_text("No security checkers are configured. Please set API keys.")
             return
-
+            
         total_items = len(items)
         await update.message.reply_text(f"Found {total_items} item(s). Analyzing with {len(checkers)} configured service(s)...")
         
-        for i in range(0, total_items, MAX_CONCURRENT_CHECKS):
-            chunk = items[i:i + MAX_CONCURRENT_CHECKS]
-            if total_items > MAX_CONCURRENT_CHECKS:
-                await update.message.reply_text(f"Processing items {i+1} to {i+len(chunk)} of {total_items}...")
-            tasks = [self._check_and_report_item(update, item, checkers) for item in chunk]
-            await asyncio.gather(*tasks)
+        scan_tasks = []
+        for item in items:
+            if item['type'] in ['url', 'domain']:
+                # Add scan tasks for URLs and domains
+                scan_tasks.append(self._check_and_report_item(update, item, checkers))
+            elif item['type'] == 'ip_address':
+                # Handle IP addresses directly without scanning
+                ip_value = item['value']
+                response_text = f"ℹ️ Found an IP address: <code>{ip_value.replace('.', '[.]')}</code>. Standalone IP addresses are not scanned."
+                scan_tasks.append(update.message.reply_html(response_text))
+        
+        for i in range(0, len(scan_tasks), MAX_CONCURRENT_CHECKS):
+            chunk = scan_tasks[i:i + MAX_CONCURRENT_CHECKS]
+            if len(scan_tasks) > MAX_CONCURRENT_CHECKS:
+                await update.message.reply_text(f"Processing a batch of {len(chunk)} items...")
+            await asyncio.gather(*chunk)
+
         logger.info(f"Finished processing all {total_items} items.")
         await self._schedule_session_shutdown()
 
     async def _check_and_report_item(self, update: Update, item: Dict, checkers: List[BaseChecker]):
         item_type, item_value = item['type'], item['value']
         proc_msg = await update.message.reply_html(f"🔍 Analyzing {item_type}: <code>{item_value.replace('.', '[.]')}</code>")
-        
-        # --- Block 1: Initial Fast Scan with short timeout ---
         try:
             tasks = [checker.check(item_value, item_type) for checker in checkers]
             results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=TOTAL_TIMEOUT)
@@ -385,23 +402,11 @@ class TelegramBot:
             results_map = {res.source: res for res in results}
             vt_result = results_map.get("VirusTotal")
             wr_result = results_map.get("Google Web Risk")
-
-        except asyncio.TimeoutError:
-            await proc_msg.edit_text(f"⏰ <b>Timeout</b> during initial scan for <code>{item_value.replace('.', '[.]')}</code>.", parse_mode='HTML')
-            return
-        except Exception as e:
-            logger.error(f"Error during initial scan for {item_value}: {e}", exc_info=True)
-            await proc_msg.edit_text(f"❌ <b>Error</b> during initial scan for <code>{item_value.replace('.', '[.]')}</code>.", parse_mode='HTML')
-            return
-
-        # --- Block 2: Decision and Polling Logic (outside the initial timeout) ---
-        try:
+            
             initial_risk_level = self.response_formatter._get_risk_level(vt_result, wr_result)
             should_poll = vt_result and vt_result.is_pending and initial_risk_level == "SAFE"
-
             initial_response = self.response_formatter.format_combined_response(item_value, results_map, is_pending=should_poll)
             await proc_msg.edit_text(initial_response, parse_mode='HTML')
-            
             if should_poll:
                 analysis_id = vt_result.details.get("analysis_id")
                 vt_checker = next((c for c in checkers if isinstance(c, VirusTotalChecker)), None)
@@ -410,10 +415,11 @@ class TelegramBot:
                     results_map["VirusTotal"] = final_vt_result
                     final_response = self.response_formatter.format_combined_response(item_value, results_map)
                     await proc_msg.edit_text(final_response, parse_mode='HTML')
-
+        except asyncio.TimeoutError:
+            await proc_msg.edit_text(f"⏰ <b>Timeout</b> during initial scan for <code>{item_value.replace('.', '[.]')}</code>.", parse_mode='HTML')
         except Exception as e:
-            logger.error(f"Error during polling/final update for {item_value}: {e}", exc_info=True)
-            await proc_msg.edit_text(f"❌ <b>Error</b> after initial scan for <code>{item_value.replace('.', '[.]')}</code>.", parse_mode='HTML')
+            logger.error(f"Error in _check_and_report_item for {item_value}: {e}", exc_info=True)
+            await proc_msg.edit_text(f"❌ <b>Error</b> during initial scan for <code>{item_value.replace('.', '[.]')}</code>.", parse_mode='HTML')
 
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Update {update} caused error: {context.error}", exc_info=context.error)
