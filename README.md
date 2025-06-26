@@ -23,7 +23,7 @@ Regardless of how you choose to run the bot, you will need to complete these ini
 ### 1. Get Prerequisites
 
 You will need three secret keys to run the bot.
--   **Telegram Bot Token:** Create a bot on Telegram by talking to the [BotFather](https://t.me/botfather).
+-   **Telegram Bot Token:** Create a bot on Telegram by talking to the [BotFather](https://t.me/botfather). Get your userID by messaging ```@userinfobot``` on Telegram.
 -   **VirusTotal/Google Threat Intelligence API Key:** Get a API key from your [VirusTotal Account Settings](https://www.virustotal.com/gui/user/YOUR_USERNAME/apikey).
 -   **Google Web Risk API Key:** Set up a project in the [Google Cloud Console](https://cloud.google.com/web-risk/docs/setting-up) and get an API key.
 
@@ -66,6 +66,7 @@ The bot reads your secret keys from environment variables.
 export TELEGRAM_TOKEN="YOUR_TELEGRAM_TOKEN"
 export VIRUSTOTAL_API_KEY="YOUR_VIRUSTOTAL_API_KEY"
 export WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
+export ADMIN_USER_ID="YOUR_TELEGRAM_USER_ID"
 ```
 
 **On Windows (Command Prompt):**
@@ -73,6 +74,7 @@ export WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
 set TELEGRAM_TOKEN="YOUR_TELEGRAM_TOKEN"
 set VIRUSTOTAL_API_KEY="YOUR_VIRUSTOTAL_API_KEY"
 set WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
+set ADMIN_USER_ID="YOUR_TELEGRAM_USER_ID"
 ```
 
 #### c. Run the Bot
@@ -142,6 +144,7 @@ Create a file named `.env` in your project directory. This file will hold your s
 TELEGRAM_TOKEN="YOUR_TELEGRAM_TOKEN"
 VIRUSTOTAL_API_KEY="YOUR_VIRUSTOTAL_API_KEY"
 WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
+ADMIN_USER_ID="YOUR_TELEGRAM_USER_ID"
 ```
 Replace the placeholder values with your actual keys.
 

@@ -18,7 +18,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 1.6
+# version: 1.7
 """
 
 import os
@@ -45,8 +45,6 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "YOUR_TELEGRAM_TOKEN")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY")
 WEBRISK_API_KEY = os.environ.get("WEBRISK_API_KEY")
-
-# Admin configuration
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID")  # Your Telegram user ID for admin commands
 
 #####################

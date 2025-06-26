@@ -9,6 +9,7 @@ services:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY}
       - WEBRISK_API_KEY=${WEBRISK_API_KEY}
+      - ADMIN_USER_ID=${ADMIN_USER_ID}  # Optional, for admin commands
     # Resource limits (optional, adjust / remove as needed)
     deploy:
       resources:
