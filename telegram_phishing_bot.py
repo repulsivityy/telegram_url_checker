@@ -9,7 +9,7 @@ links are safe, suspicious, or malicious.
 
 It leverages a combination of VT detection ratio, GTI assessment and Web Risk's threat scores to provide a risk assessment.
 
-Gemini 2.5 Pro and Claude Sonnet was used to optimise the code for performance and readability.
+Disclaimer: Gemini 2.5 Pro and Claude Sonnet was used to optimise the code for performance and readability.
 
 Usage: 
 1. Set environment variables for TELEGRAM_TOKEN, VIRUSTOTAL_API_KEY, and WEBRISK_API_KEY.
@@ -33,19 +33,22 @@ from typing import Optional, List, Dict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- Configuration ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Load configuration from environment variables
+#####################
+# Environment Variables
+#####################
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "YOUR_TELEGRAM_TOKEN")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "YOUR_VIRUSTOTAL_API_KEY")
 WEBRISK_API_KEY = os.environ.get("WEBRISK_API_KEY", "YOUR_WEBRISK_API_KEY")
 
-# --- Constants ---
+#####################
+# Constants / Variables. Adjust these as needed.
+#####################
 MALICIOUS_THRESHOLD = 3
 API_TIMEOUT = 10
 TOTAL_TIMEOUT = 25
@@ -55,7 +58,6 @@ VT_POLLING_SCHEDULE = [60, 45, 30] # The initial custom schedule
 VT_POLLING_DEFAULT_INTERVAL = 30 # The interval after the schedule is used up
 TOTAL_POLLING_TIMEOUT = 240 # Max time to wait for a poll in seconds (4 minutes)
 
-# --- Standardized Data Structure ---
 @dataclass
 class ScanResult:
     """A standardized object for all checker results."""
@@ -66,7 +68,9 @@ class ScanResult:
     error: bool = False
     is_pending: bool = False
 
-# --- Core Components ---
+#####################
+# Core Components
+#####################
 class URLExtractor:
     """Extracts URLs and domains based on clear classification rules."""
     DOMAIN_NAME_PATTERN = r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,6}"
@@ -106,16 +110,17 @@ class BaseChecker(ABC):
         """Checks a value and returns a standardized ScanResult."""
         pass
 
-
+#####################
+# Checks against VirusTotal / GTI
+#####################
 class VirusTotalChecker(BaseChecker):
-    """Checks items against VirusTotal, returning a standard ScanResult."""
     SOURCE_NAME = "VirusTotal"
     BASE_URL = "https://www.virustotal.com/api/v3"
 
     def __init__(self, api_key: str, session: aiohttp.ClientSession):
         super().__init__(session)
         self.api_key = api_key
-        self.headers = {"x-apikey": self.api_key, "x-tool": "telegram-phishing-checker", "Accept": "application/json"}
+        self.headers = {"x-apikey": self.api_key, "x-tool": "telegram-phishing-bot", "Accept": "application/json"}
 
     async def _make_request(self, endpoint, method='GET', **kwargs):
         return await self.session.request(method, endpoint, headers=self.headers, timeout=API_TIMEOUT, **kwargs)
@@ -167,11 +172,10 @@ class VirusTotalChecker(BaseChecker):
             logger.error(f"Error during URL submission for {url}: {e}")
             return ScanResult(False, "API Error during submission", self.SOURCE_NAME, error=True)
     
-    # --- METHOD UPDATED for robust polling ---
     async def poll_for_result(self, analysis_id: str) -> ScanResult:
         """
         Polls the analysis endpoint using a custom schedule, then a default interval,
-        up to a total timeout.
+        up to a total timeout. Used for new submissions that are pending.
         """
         analysis_endpoint = f"{self.BASE_URL}/analyses/{analysis_id}"
         start_time = asyncio.get_running_loop().time()
@@ -204,7 +208,9 @@ class VirusTotalChecker(BaseChecker):
         logger.warning(f"Polling finished or timed out for analysis ID {analysis_id}.")
         return ScanResult(False, "Analysis timed out after submission", self.SOURCE_NAME, error=True)
 
-
+#####################
+# Checks against Google Web Risk
+#####################
 class WebRiskChecker(BaseChecker):
     SOURCE_NAME = "Google Web Risk"
     BASE_URL = "https://webrisk.googleapis.com/v1eap1:evaluateUri"
@@ -291,7 +297,9 @@ class ResponseFormatter:
             f"{details_section}\n\n"
             f"{recommendation}{pending_text}"
         )
-
+#####################
+# Telegram Bot Implementation
+#####################
 class TelegramBot:
     def __init__(self, token: str):
         self.application = Application.builder().token(token).build()
