@@ -14,6 +14,7 @@ It provides a clear, standardized response format by assessing links against mul
 -   **Safe, Un-clickable Links:** Automatically "defangs" all URLs and domains in its responses (e.g., `example[.]com` and `http[:]//`) to prevent accidental clicks on potentially malicious links.
 -   **Concurrent & Asynchronous:** Processes multiple links from a single message at the same time for incredibly fast response times.
 -   **Efficient & Stable:** Manages network resources with an intelligent session manager that closes connections during idle periods. Handles large numbers of links by processing them in manageable chunks.
+-   **Degrades Gracefully:** Should you not have any of the services (eg, Web Risk), the code doesn't crash and continues to run should a component be missing. 
 
 ## Setup
 

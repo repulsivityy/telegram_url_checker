@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 # Environment Variables
 #####################
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "YOUR_TELEGRAM_TOKEN")
-VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "YOUR_VIRUSTOTAL_API_KEY")
-WEBRISK_API_KEY = os.environ.get("WEBRISK_API_KEY", "YOUR_WEBRISK_API_KEY")
+VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY")
+WEBRISK_API_KEY = os.environ.get("WEBRISK_API_KEY")
 
 #####################
 # Constants / Variables. Adjust these as needed.
@@ -54,9 +54,8 @@ API_TIMEOUT = 10
 TOTAL_TIMEOUT = 25
 IDLE_SHUTDOWN_SECONDS = 600
 MAX_CONCURRENT_CHECKS = 20
-VT_POLLING_SCHEDULE = [60, 45, 30] # The initial custom schedule
-VT_POLLING_DEFAULT_INTERVAL = 30 # The interval after the schedule is used up
-TOTAL_POLLING_TIMEOUT = 240 # Max time to wait for a poll in seconds (4 minutes)
+VT_POLLING_SCHEDULE = [60, 45, 30, 30] 
+TOTAL_POLLING_TIMEOUT = 240
 
 @dataclass
 class ScanResult:
@@ -69,7 +68,7 @@ class ScanResult:
     is_pending: bool = False
 
 #####################
-# Core Components
+# Core Component to extract URLs and domains 
 #####################
 class URLExtractor:
     """Extracts URLs and domains based on clear classification rules."""
@@ -129,8 +128,7 @@ class VirusTotalChecker(BaseChecker):
         attributes = vt_data.get("data", {}).get("attributes", {})
         gti_assessment = attributes.get("gti_assessment")
         stats = attributes.get("last_analysis_stats", {})
-        if not stats:
-            return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
+        if not stats: return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
         malicious_count = stats.get("malicious", 0) + stats.get("suspicious", 0)
         total_engines = sum(stats.values())
         summary = f"{malicious_count}/{total_engines} vendors flagged this as malicious"
@@ -173,27 +171,18 @@ class VirusTotalChecker(BaseChecker):
             return ScanResult(False, "API Error during submission", self.SOURCE_NAME, error=True)
     
     async def poll_for_result(self, analysis_id: str) -> ScanResult:
-        """
-        Polls the analysis endpoint using a custom schedule, then a default interval,
-        up to a total timeout. Used for new submissions that are pending.
-        """
         analysis_endpoint = f"{self.BASE_URL}/analyses/{analysis_id}"
         start_time = asyncio.get_running_loop().time()
-        
         schedule_iterator = iter(VT_POLLING_SCHEDULE)
         attempt = 0
-
         while asyncio.get_running_loop().time() - start_time < TOTAL_POLLING_TIMEOUT:
             attempt += 1
             try:
-                # Use the custom schedule first, then fall back to the default interval
                 delay = next(schedule_iterator)
             except StopIteration:
                 delay = VT_POLLING_DEFAULT_INTERVAL
-            
             logger.info(f"Polling VT analysis ID {analysis_id}. Waiting {delay}s... (Attempt {attempt})")
             await asyncio.sleep(delay)
-            
             try:
                 async with await self._make_request(analysis_endpoint) as response:
                     if response.ok:
@@ -204,9 +193,8 @@ class VirusTotalChecker(BaseChecker):
                             return self._parse_results(analysis_data)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.error(f"Polling error for analysis ID {analysis_id}: {e}")
-        
         logger.warning(f"Polling finished or timed out for analysis ID {analysis_id}.")
-        return ScanResult(False, "Analysis timed out after submission", self.SOURCE_NAME, error=True)
+        return ScanResult(False, "Analysis timed out", self.SOURCE_NAME, error=True)
 
 #####################
 # Checks against Google Web Risk
@@ -255,7 +243,14 @@ class ResponseFormatter:
         "ERROR":   {"emoji": "❓", "level": "ERROR",   "rec": "❓ INCONCLUSIVE - Exercise caution as threat assessment is unclear."}
     }
 
-    def _get_risk_level(self, vt_result: ScanResult, wr_result: ScanResult) -> str:
+#####################
+# Condition to degrade gracefully if any service is not configured
+#####################
+    def _get_risk_level(self, vt_result: Optional[ScanResult], wr_result: Optional[ScanResult]) -> str:
+        # Create default "not available" results for any service that didn't run
+        vt_result = vt_result or ScanResult(False, "Service not configured", "VirusTotal", error=True)
+        wr_result = wr_result or ScanResult(False, "Service not configured", "Google Web Risk", error=True)
+
         if vt_result.error or wr_result.error: return "ERROR"
         gti_score = vt_result.details.get("threat_score_value")
         gti_verdict = vt_result.details.get("verdict", {}).get("value")
@@ -269,34 +264,38 @@ class ResponseFormatter:
             return "SAFE"
         return "WARNING"
 
-    def format_combined_response(self, target: str, vt_result: ScanResult, wr_result: ScanResult, is_pending: bool = False) -> str:
+    def format_combined_response(self, target: str, results_map: Dict[str, ScanResult], is_pending: bool = False) -> str:
+        vt_result = results_map.get("VirusTotal") or ScanResult(False, "Service not configured", "VirusTotal")
+        wr_result = results_map.get("Google Web Risk") or ScanResult(False, "Service not configured", "Google Web Risk")
+        
         risk_level = self._get_risk_level(vt_result, wr_result)
         template = self.RESPONSE_TEMPLATES[risk_level]
         header = f"{template['emoji']} {template['level']}"
         recommendation = f"<b>Recommendation:</b>\n {template['rec']}"
         defanged_target = target.replace('.', '[.]').replace(':', '[:]')
-        gti_verdict_line = ""
-        gti_verdict_raw = vt_result.details.get("verdict", {}).get("value")
-        if gti_verdict_raw:
-            display_verdict = gti_verdict_raw.replace("VERDICT_", "").capitalize()
-            gti_verdict_line = f"Google TI Verdict: {display_verdict}"
         
-        details_lines = [
-            f"VirusTotal: {vt_result.summary}",
-            gti_verdict_line,
-            f"Google Web Risk: {wr_result.summary}"
-        ]
+        details_lines = []
+        if "VirusTotal" in results_map:
+            details_lines.append(f"VirusTotal: {vt_result.summary}")
+            gti_verdict_raw = vt_result.details.get("verdict", {}).get("value")
+            if gti_verdict_raw:
+                display_verdict = gti_verdict_raw.replace("VERDICT_", "").capitalize()
+                details_lines.append(f"Google TI Verdict: {display_verdict}")
+        
+        if "Google Web Risk" in results_map:
+            details_lines.append(f"Google Web Risk: {wr_result.summary}")
+
         details_section = "\n".join(filter(None, details_lines))
-        
         pending_text = "\n\n<i>⏳ Awaiting final analysis results from VirusTotal...</i>" if is_pending else ""
         
         return (
             f"{header}\n"
             f"Link: <code>{defanged_target}</code>\n"
-            f"----------------------------------\n"
+            "----------------------------------\n"
             f"{details_section}\n\n"
             f"{recommendation}{pending_text}"
         )
+
 #####################
 # Telegram Bot Implementation
 #####################
@@ -351,38 +350,59 @@ class TelegramBot:
             await update.message.reply_text("No URLs or domains were found in your message.")
             await self._schedule_session_shutdown()
             return
-        total_items = len(items)
-        await update.message.reply_text(f"Found {total_items} item(s). Beginning analysis...")
+
         session = await self._get_session()
-        vt_checker = VirusTotalChecker(VIRUSTOTAL_API_KEY, session)
-        webrisk_checker = WebRiskChecker(WEBRISK_API_KEY, session)
+        
+        # Checks if API keys are set and creates a list of active checkers
+        checkers = []
+        if VIRUSTOTAL_API_KEY and not VIRUSTOTAL_API_KEY.startswith("YOUR_"):
+            checkers.append(VirusTotalChecker(VIRUSTOTAL_API_KEY, session))
+        if WEBRISK_API_KEY and not WEBRISK_API_KEY.startswith("YOUR_"):
+            checkers.append(WebRiskChecker(WEBRISK_API_KEY, session))
+
+        if not checkers:
+            await update.message.reply_text("No security checkers are configured. Please set API keys.")
+            return
+
+        total_items = len(items)
+        await update.message.reply_text(f"Found {total_items} item(s). Analyzing with {len(checkers)} configured service(s)...")
+        
         for i in range(0, total_items, MAX_CONCURRENT_CHECKS):
             chunk = items[i:i + MAX_CONCURRENT_CHECKS]
             if total_items > MAX_CONCURRENT_CHECKS:
                 await update.message.reply_text(f"Processing items {i+1} to {i+len(chunk)} of {total_items}...")
-            tasks = [self._check_and_report_item(update, item, vt_checker, webrisk_checker) for item in chunk]
+            
+            # Pass the list of active checkers to the processing function
+            tasks = [self._check_and_report_item(update, item, checkers) for item in chunk]
             await asyncio.gather(*tasks)
+        
         logger.info(f"Finished processing all {total_items} items.")
         await self._schedule_session_shutdown()
 
-    async def _check_and_report_item(self, update: Update, item: Dict, vt_checker: BaseChecker, webrisk_checker: BaseChecker):
+    async def _check_and_report_item(self, update: Update, item: Dict, checkers: List[BaseChecker]):
         item_type, item_value = item['type'], item['value']
         proc_msg = await update.message.reply_html(f"🔍 Analyzing {item_type}: <code>{item_value.replace('.', '[.]')}</code>")
         try:
-            vt_task = vt_checker.check(item_value, item_type)
-            wr_task = webrisk_checker.check(item_value, item_type)
-            vt_result, wr_result = await asyncio.wait_for(asyncio.gather(vt_task, wr_task), timeout=TOTAL_TIMEOUT)
+            tasks = [checker.check(item_value, item_type) for checker in checkers]
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=TOTAL_TIMEOUT)
             
-            initial_risk_level = self.response_formatter._get_risk_level(vt_result, wr_result)
-            should_poll = vt_result.is_pending and initial_risk_level == "SAFE"
-            initial_response = self.response_formatter.format_combined_response(item_value, vt_result, wr_result, is_pending=should_poll)
+            results_map = {res.source: res for res in results}
+            vt_result = results_map.get("VirusTotal")
+            
+            should_poll = vt_result and vt_result.is_pending and self.response_formatter._get_risk_level(vt_result, results_map.get("Google Web Risk")) == "SAFE"
+            
+            initial_response = self.response_formatter.format_combined_response(item_value, results_map, is_pending=should_poll)
             await proc_msg.edit_text(initial_response, parse_mode='HTML')
+
             if should_poll:
                 analysis_id = vt_result.details.get("analysis_id")
-                if analysis_id:
+                vt_checker = next((c for c in checkers if isinstance(c, VirusTotalChecker)), None)
+                if analysis_id and vt_checker:
                     final_vt_result = await vt_checker.poll_for_result(analysis_id)
-                    final_response = self.response_formatter.format_combined_response(item_value, final_vt_result, wr_result)
+                    results_map["VirusTotal"] = final_vt_result # Update the map with the final result
+                    final_response = self.response_formatter.format_combined_response(item_value, results_map)
                     await proc_msg.edit_text(final_response, parse_mode='HTML')
+
         except asyncio.TimeoutError:
             await proc_msg.edit_text(f"⏰ <b>Timeout</b> checking <code>{item_value.replace('.', '[.]')}</code>.", parse_mode='HTML')
         except Exception as e:
@@ -405,11 +425,12 @@ class TelegramBot:
             if loop.is_running(): loop.create_task(self.shutdown())
             else: loop.run_until_complete(self.shutdown())
 
+
 def main():
-    required_vars = ["TELEGRAM_TOKEN", "VIRUSTOTAL_API_KEY", "WEBRISK_API_KEY"]
-    if not all(os.environ.get(key) and not os.environ.get(key).startswith("YOUR_") for key in required_vars):
-        logger.critical("One or more environment variables (TELEGRAM_TOKEN, VIRUSTOTAL_API_KEY, WEBRISK_API_KEY) are not set correctly.")
+    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.startswith("YOUR_"):
+        logger.critical("TELEGRAM_TOKEN is not set. The bot cannot start.")
         return
+        
     bot = TelegramBot(TELEGRAM_TOKEN)
     logger.info("Starting fully optimized bot...")
     bot.run()
