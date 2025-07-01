@@ -1,3 +1,14 @@
+#############
+# Phishing Detection Tool with AI to identify potential phishing or scam websites
+# This script captures screenshots of suspicious URLs and analyzes them using Google's Gemini AI to detect phishing attempts and scam indicators.
+# It uses Playwright with Firefox to handle complex web pages and bypass security warnings.
+# Check README.md for more details.
+#
+# Code is provided as best effort. Use at your own risk
+# Author: dominicchua@
+# Version: 1.0
+#############
+
 import base64
 import requests
 import json
