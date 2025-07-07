@@ -18,7 +18,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 1.7
+# version: 2.0
 """
 
 import os
@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio # For asyncio tasks and timeouts coming from gemini analysis for screenshots
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -435,6 +436,53 @@ class WebRiskChecker(BaseChecker):
             logger.error(f"{self.SOURCE_NAME} error for {value}: {e}")
             return ScanResult(False, "API Error", self.SOURCE_NAME, error=True)
 
+
+#####################
+# Checks screenshot against Gemini AI
+#####################
+from ai_phishing_detector.ai_phishing_detector import analyze_url_for_phishing
+
+class AIImageChecker(BaseChecker):
+    SOURCE_NAME = "AI Analysis"
+
+    def __init__(self):
+        """No session needed as it's a local sync function."""
+        pass
+
+    def _parse_results(self, analysis_text: str) -> ScanResult:
+    #Parses the raw text output from the Gemini AI
+        if not analysis_text:
+            return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
+
+        # Corrected Regex: Removed the square brackets \[ and \] to match your AI's output
+        match = re.search(r"RISK ASSESSMENT:\s*(Low|Medium|High)\s*-\s*(.*)", analysis_text, re.IGNORECASE | re.DOTALL)
+
+        if match:
+            risk_level = match.group(1).lower()
+            reason = match.group(2).strip()
+            # is_malicious is only True if AI says High, otherwise it's informational
+            is_malicious = risk_level == "high" 
+            summary = f"Risk: {risk_level.capitalize()} - {reason}"
+            risk_factors = {"ai_risk": risk_level}
+            return ScanResult(is_malicious, summary, self.SOURCE_NAME, details={"full_analysis": analysis_text}, risk_factors=risk_factors)
+    
+        # Fallback if the specific line isn't found
+        summary = "Could not determine risk level from AI response."
+        return ScanResult(False, summary, self.SOURCE_NAME, details={"full_analysis": analysis_text}, error=True)
+
+    async def check(self, value: str, item_type: str) -> ScanResult:
+        """Runs the synchronous AI analysis in a separate thread."""
+        if item_type != 'url':
+            return ScanResult(False, "Skipped (not a URL)", self.SOURCE_NAME)
+        
+        try:
+            # Run the synchronous function in a thread to avoid blocking the bot
+            analysis_result_string = await asyncio.to_thread(analyze_url_for_phishing, value)
+            return self._parse_results(analysis_result_string)
+        except Exception as e:
+            logger.error(f"{self.SOURCE_NAME} error for {value}: {e}")
+            return ScanResult(False, "Analysis failed", self.SOURCE_NAME, error=True)
+
 #####################
 # Formats the response for the user
 #####################
@@ -446,26 +494,49 @@ class ResponseFormatter:
         "ERROR":   {"emoji": "❓", "level": "ERROR",   "rec": "❓ INCONCLUSIVE - Exercise caution as threat assessment is unclear."}
     }
 
-    def _get_risk_level(self, vt_result: Optional[ScanResult], wr_result: Optional[ScanResult]) -> str:
+    def _get_risk_level(self, vt_result: Optional[ScanResult], wr_result: Optional[ScanResult], ai_result: Optional[ScanResult] = None) -> str:
+        """Determines the final risk level based on checker results."""
+        # --- Default setup for missing results ---
         vt_result = vt_result or ScanResult(False, "Not configured", "VirusTotal", error=True)
         wr_result = wr_result or ScanResult(False, "Not configured", "Google Web Risk", error=True)
-        if vt_result.error or wr_result.error: return "ERROR"
+        ai_result = ai_result or ScanResult(False, "Not run", "AI Analysis", error=True)
+
+        if vt_result.error or wr_result.error:
+            return "ERROR"
+        
         vt_factors = vt_result.risk_factors
         wr_factors = wr_result.risk_factors
-        if (vt_factors.get("gti_verdict") == "VERDICT_MALICIOUS" or (vt_factors.get("gti_score") is not None and vt_factors.get("gti_score") > 60) or wr_factors.get("has_high_threat") or vt_factors.get("is_malicious_threshold")):
+        ai_factors = ai_result.risk_factors
+
+        # --- Consolidated DANGER Logic ---
+        # Returns DANGER if any of these conditions are met.
+        if (vt_factors.get("gti_verdict") == "VERDICT_MALICIOUS" or 
+            (vt_factors.get("gti_score") is not None and vt_factors.get("gti_score") >= 60) or 
+            wr_factors.get("has_high_threat") or 
+            ai_factors.get("ai_risk") == "high"):
             return "DANGER"
-        if (vt_factors.get("gti_verdict") == "VERDICT_HARMLESS" or (vt_factors.get("classic_score") == 0 and wr_factors.get("is_clean"))):
+
+        # --- SAFE Logic ---
+        if (vt_factors.get("gti_verdict") == "VERDICT_HARMLESS" or 
+            (vt_factors.get("classic_score") == 0 and wr_factors.get("is_clean"))):
             return "SAFE"
+            
+        # --- Default to WARNING ---
         return "WARNING"
 
     def format_combined_response(self, target: str, results_map: Dict[str, ScanResult], is_pending: bool = False) -> str:
         vt_result = results_map.get("VirusTotal")
         wr_result = results_map.get("Google Web Risk")
-        risk_level = self._get_risk_level(vt_result, wr_result)
+        ai_result = results_map.get("AI Analysis") # This line looks for "AI Image Analysis"
+
+        # Pass the ai_result to the risk calculation method.
+        risk_level = self._get_risk_level(vt_result, wr_result, ai_result)
         template = self.RESPONSE_TEMPLATES[risk_level]
+        
         header = f"{template['emoji']} {template['level']}"
         recommendation = f"<b>Recommendation:</b>\n {template['rec']}"
         defanged_target = target.replace('.', '[.]').replace(':', '[:]')
+        
         details_lines = []
         if vt_result:
             details_lines.append(f"VirusTotal: {vt_result.summary}")
@@ -475,8 +546,18 @@ class ResponseFormatter:
                 details_lines.append(f"Google TI Verdict: {display_verdict}")
         if wr_result:
             details_lines.append(f"Google Web Risk: {wr_result.summary}")
+        
+        # Add AI result with disclaimer for Medium/Low risk
+        if ai_result and not ai_result.error:
+            ai_risk = ai_result.risk_factors.get("ai_risk")
+            details_lines.append(f"AI Analysis: {ai_result.summary}")
+            # If the final verdict wasn't DANGER due to AI's high risk, add a disclaimer
+            if ai_risk in ["low", "medium"]:
+                details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
+
         details_section = "\n".join(filter(None, details_lines))
         pending_text = "\n\n<i>⏳ Awaiting final analysis results from VirusTotal...</i>" if is_pending else ""
+        
         return (
             f"{header}\n"
             f"Link: <code>{defanged_target}</code>\n"
@@ -601,6 +682,7 @@ class TelegramBot:
             checkers.append(VirusTotalChecker(VIRUSTOTAL_API_KEY, session))
         if WEBRISK_API_KEY and not WEBRISK_API_KEY.startswith("YOUR_"):
             checkers.append(WebRiskChecker(WEBRISK_API_KEY, session))
+        checkers.append(AIImageChecker())
         if not checkers:
             await update.message.reply_text("No security checkers are configured. Please set API keys.")
             return
