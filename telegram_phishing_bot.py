@@ -477,15 +477,14 @@ class AIImageChecker(BaseChecker):
         elif item_type == 'url':
             url_to_check = value
         else:
-            # Skip other types like ip_address
             return ScanResult(False, f"Skipped (not a URL or domain)", self.SOURCE_NAME)
- 
+
         try:
-            # Run the synchronous function in a thread to avoid blocking the bot
-            analysis_result_string = await asyncio.to_thread(analyze_url_for_phishing, url_to_check)
+            # The call is now a direct await since the target function is async
+            analysis_result_string = await analyze_url_for_phishing(url_to_check)
             return self._parse_results(analysis_result_string)
         except Exception as e:
-            logger.error(f"{self.SOURCE_NAME} error for {value}: {e}")
+            logger.error(f"{self.SOURCE_NAME} error for {url_to_check}: {e}")
             return ScanResult(False, "Analysis failed", self.SOURCE_NAME, error=True)
 
 #####################
