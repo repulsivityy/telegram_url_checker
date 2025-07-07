@@ -18,7 +18,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.0
+# version: 2.0.1
 """
 
 import os
@@ -472,12 +472,17 @@ class AIImageChecker(BaseChecker):
 
     async def check(self, value: str, item_type: str) -> ScanResult:
         """Runs the synchronous AI analysis in a separate thread."""
-        if item_type != 'url':
-            return ScanResult(False, "Skipped (not a URL)", self.SOURCE_NAME)
-        
+        if item_type == 'domain':
+            url_to_check = f"https://{value}"
+        elif item_type == 'url':
+            url_to_check = value
+        else:
+            # Skip other types like ip_address
+            return ScanResult(False, f"Skipped (not a URL or domain)", self.SOURCE_NAME)
+ 
         try:
             # Run the synchronous function in a thread to avoid blocking the bot
-            analysis_result_string = await asyncio.to_thread(analyze_url_for_phishing, value)
+            analysis_result_string = await asyncio.to_thread(analyze_url_for_phishing, url_to_check)
             return self._parse_results(analysis_result_string)
         except Exception as e:
             logger.error(f"{self.SOURCE_NAME} error for {value}: {e}")
