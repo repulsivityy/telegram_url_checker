@@ -18,7 +18,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.1
+# version: 2.1.3
 """
 
 import os
@@ -528,46 +528,55 @@ class ResponseFormatter:
         # --- Default to WARNING ---
         return "WARNING"
 
-    def format_combined_response(self, target: str, results_map: Dict[str, ScanResult], is_pending: bool = False) -> str:
+    def format_combined_response(self, target: str, results_map: Dict[str, ScanResult], configured_checkers: set) -> str:
+        # This signature is now correct
+
         vt_result = results_map.get("VirusTotal")
         wr_result = results_map.get("Google Web Risk")
-        ai_result = results_map.get("AI Analysis") # This line looks for "AI Image Analysis"
+        ai_result = results_map.get("AI Analysis")
 
-        # Pass the ai_result to the risk calculation method.
         risk_level = self._get_risk_level(vt_result, wr_result, ai_result)
         template = self.RESPONSE_TEMPLATES[risk_level]
-        
+
         header = f"{template['emoji']} {template['level']}"
         recommendation = f"<b>Recommendation:</b>\n {template['rec']}"
         defanged_target = target.replace('.', '[.]').replace(':', '[:]')
-        
+
         details_lines = []
-        if vt_result:
-            details_lines.append(f"VirusTotal: {vt_result.summary}")
-            gti_verdict_raw = vt_result.details.get("verdict", {}).get("value")
-            if gti_verdict_raw:
-                display_verdict = gti_verdict_raw.replace("VERDICT_", "").capitalize()
-                details_lines.append(f"Google TI Verdict: {display_verdict}")
-        if wr_result:
-            details_lines.append(f"Google Web Risk: {wr_result.summary}")
-        
-        # Add AI result with disclaimer for Medium/Low risk
-        if ai_result and not ai_result.error:
-            ai_risk = ai_result.risk_factors.get("ai_risk")
-            details_lines.append(f"AI Analysis: {ai_result.summary}")
-            # If the final verdict wasn't DANGER due to AI's high risk, add a disclaimer
-            if ai_risk in ["low", "medium"]:
-                details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
+
+        # This logic now works because 'configured_checkers' is a defined parameter
+        if "VirusTotal" in configured_checkers:
+            if vt_result:
+                details_lines.append(f"VirusTotal: {vt_result.summary}")
+                gti_verdict_raw = vt_result.details.get("verdict", {}).get("value")
+                if gti_verdict_raw:
+                    display_verdict = gti_verdict_raw.replace("VERDICT_", "").capitalize()
+                    details_lines.append(f"Google TI Verdict: {display_verdict}")
+            else:
+                details_lines.append("VirusTotal: ⏳ Still analyzing...")
+
+        if "Google Web Risk" in configured_checkers:
+            if wr_result:
+                details_lines.append(f"Google Web Risk: {wr_result.summary}")
+            else:
+                details_lines.append("Google Web Risk: ⏳ Still analyzing...")
+
+        if "AI Analysis" in configured_checkers:
+            if ai_result:
+                details_lines.append(f"AI Analysis: {ai_result.summary}")
+                if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
+                    details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
+            else:
+                details_lines.append("AI Analysis: ⏳ Still analyzing...")
 
         details_section = "\n".join(filter(None, details_lines))
-        pending_text = "\n\n<i>⏳ Awaiting final analysis results from VirusTotal...</i>" if is_pending else ""
-        
+
         return (
             f"{header}\n"
             f"Link: <code>{defanged_target}</code>\n"
             f"----------------------------------\n"
             f"{details_section}\n\n"
-            f"{recommendation}{pending_text}"
+            f"{recommendation}"
         )
 
 #####################
@@ -712,60 +721,71 @@ class TelegramBot:
         logger.info(f"Finished processing all {total_items} items.")
         await self._schedule_session_shutdown()
 
-    item_type, item_value = item['type'], item['value']
+    #item_type, item_value = item['type'], item['value']
 
     async def _check_and_report_item(self, update: Update, item: Dict, all_checkers: List[BaseChecker]):
         item_type, item_value = item['type'], item['value']        
         proc_msg = await update.message.reply_html(f"🔍 Analyzing {item_type}: <code>{item_value.replace('.', '[.]')}</code>")
         
         try:
+            configured_checker_names = {c.SOURCE_NAME for c in all_checkers}
+
             # 1. Launch all initial checkers concurrently
             initial_tasks = {asyncio.create_task(c.check(item_value, item_type), name=c.SOURCE_NAME) for c in all_checkers}
             pending_tasks = initial_tasks.copy()
             results_map = {}
 
-            # 2. Loop until all tasks are done or we exit early based on Web Risk
             while pending_tasks:
-                # 3. Wait for the NEXT task to complete
                 done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-                
-                # 4. Process the completed task(s)
+            
                 for task in done:
                     source_name = task.get_name()
                     try:
                         result = task.result()
                         results_map[source_name] = result
                         logger.info(f"Task '{source_name}' completed for {item_value}.")
-                        
-                        # 5. <<< NEW EARLY EXIT LOGIC >>>
-                        # Check ONLY if the completed task is Web Risk and if it's a high threat.
-                        if isinstance(result, ScanResult) and result.source == WebRiskChecker.SOURCE_NAME and result.risk_factors.get("has_high_threat"):
-                            logger.warning(f"High-confidence threat from Web Risk for {item_value}. Exiting early.")
-                            # Cancel any remaining tasks
-                            for p_task in pending_tasks:
-                                p_task.cancel()
-                        
-                            # Format final response and exit the function
-                            final_response = self.response_formatter.format_combined_response(item_value, results_map)
-                            await proc_msg.edit_text(final_response, parse_mode='HTML')
-                            return
 
-                        # 6. Handle VT polling if necessary
+                        # Handle VT polling if necessary
                         if isinstance(result, ScanResult) and result.source == VirusTotalChecker.SOURCE_NAME and result.is_pending:
                             vt_checker = next((c for c in all_checkers if isinstance(c, VirusTotalChecker)), None)
                             analysis_id = result.details.get("analysis_id")
-                        if vt_checker and analysis_id:
-                            logger.info(f"VT requires polling for {item_value}. Creating polling task.")
-                            polling_task = asyncio.create_task(vt_checker.poll_for_result(analysis_id), name="VirusTotal Polling")
-                            pending_tasks.add(polling_task) # Add the new task to the wait set
+                            if vt_checker and analysis_id:
+                                polling_task = asyncio.create_task(vt_checker.poll_for_result(analysis_id), name="VirusTotal Polling")
+                                pending_tasks.add(polling_task)
 
                     except Exception as e:
-                        logger.error(f"Task '{source_name}' failed for {item_value}: {e}")
+                        logger.error(f"Task '{source_name}' failed for {item_value}: {e}", exc_info=True)
                         results_map[source_name] = ScanResult(False, "Task failed", source_name, error=True)
 
-            # 7. If the loop finishes, all tasks are complete without a Web Risk early exit
-            logger.info(f"All checks complete for {item_value}.")
-            final_response = self.response_formatter.format_combined_response(item_value, results_map)
+                intermediate_response = self.response_formatter.format_combined_response(item_value, results_map, configured_checker_names)
+
+                try:
+                    await proc_msg.edit_text(intermediate_response, parse_mode='HTML')
+                except Exception as edit_error:
+                    logger.warning(f"Could not edit message for {item_value}, likely no change in content. Error: {edit_error}")
+
+                # Check for Web Risk early exit condition AFTER updating the message
+                wr_result = results_map.get(WebRiskChecker.SOURCE_NAME)
+                if wr_result and wr_result.risk_factors.get("has_high_threat"):
+                    logger.warning(f"High-confidence threat from Web Risk for {item_value}. Cancelling remaining tasks.")
+                    for p_task in pending_tasks:
+                        p_task.cancel()
+                        source_name = p_task.get_name()
+                        # Add a "Cancelled" status to the map
+                        if source_name not in results_map:
+                            results_map[source_name] = ScanResult(False, "❌ Cancelled due to confirmed threat", source_name)
+                        # Perform the FINAL message edit with the updated map
+                        final_response = self.response_formatter.format_combined_response(item_value, results_map, configured_checker_names)
+                        await proc_msg.edit_text(final_response, parse_mode='HTML')
+                    return # Exit early
+
+            #logger.info(f"All checks complete for {item_value}.")
+
+            final_response = self.response_formatter.format_combined_response(
+                item_value, 
+                results_map,
+            configured_checker_names
+            )
             await proc_msg.edit_text(final_response, parse_mode='HTML')
 
         except Exception as e:

@@ -6,29 +6,29 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 1.4
+# Version: 1.4.4
 #############
 
 import base64
 import requests
 import json
 import os
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import asyncio
 
 API_KEY = os.environ.get("GEMINI_APIKEY")
 GEMINI_MODEL = "gemini-2.5-flash-preview-05-20" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
-def take_screenshot_firefox_enhanced(url: str) -> bytes:
+async def take_screenshot_firefox_enhanced(url: str) -> bytes:
     """
     Takes a full-page screenshot using Firefox with enhanced Safe Browsing bypass.
     Includes warning page detection and bypass attempts.
     """
     print(f"Taking screenshot with Firefox (enhanced): {url}")  
     try:
-        with sync_playwright() as p:
-            browser = p.firefox.launch(
+        async with async_playwright() as p:
+            browser = await p.firefox.launch(
                 headless=True,
                 firefox_user_prefs={
                     # Disable all Safe Browse features
@@ -97,7 +97,7 @@ def take_screenshot_firefox_enhanced(url: str) -> bytes:
                 }
             )
             
-            context = browser.new_context(
+            context = await browser.new_context(
                 ignore_https_errors=True,
                 bypass_csp=True,
                 accept_downloads=False,
@@ -105,10 +105,10 @@ def take_screenshot_firefox_enhanced(url: str) -> bytes:
                 viewport={"width": 1280, "height": 720}
             )
             
-            page = context.new_page()
+            page = await context.new_page()
             
             # Set additional headers to look more like a regular browser
-            page.set_extra_http_headers({
+            await page.set_extra_http_headers({
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Accept-Encoding': 'gzip, deflate',
@@ -119,19 +119,20 @@ def take_screenshot_firefox_enhanced(url: str) -> bytes:
             
             # Navigate to the URL
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as nav_error:
                 print(f"Navigation error: {nav_error}")
                 # Try with a simpler wait condition
-                page.goto(url, wait_until="commit", timeout=30000)
+                await page.goto(url, wait_until="commit", timeout=30000)
             
             # Wait for page to load
-            page.wait_for_timeout(3000)
+            await page.wait_for_timeout(3000)
             
             # Check for Firefox-specific warning pages and bypass them
             try:
-                page_content = page.content().lower()
-                page_text = page.text_content('body').lower() if page.locator('body').count() > 0 else ""
+                page_content = (await page.content()).lower()
+                page_text = (await page.text_content('body')).lower() if await page.locator('body').count() > 0 else ""
+
                 
                 # Firefox warning indicators
                 firefox_warnings = [
@@ -160,30 +161,30 @@ def take_screenshot_firefox_enhanced(url: str) -> bytes:
                     
                     for selector in bypass_selectors:
                         try:
-                            element = page.wait_for_selector(selector, timeout=2000)
-                            if element and element.is_visible():
+                            element = await page.wait_for_selector(selector, timeout=2000)
+                            if element and await element.is_visible():
                                 print(f"Found bypass element: {selector}")
-                                element.click()
-                                page.wait_for_timeout(2000)
+                                await element.click()
+                                await page.wait_for_timeout(2000)
                                 break
                         except:
                             continue
                     
                     # Additional wait after bypass attempt
-                    page.wait_for_timeout(3000)
+                    await page.wait_for_timeout(3000)
                 
             except Exception as warning_error:
                 print(f"Warning bypass error (continuing): {warning_error}")
             
             # Take the screenshot (PNG doesn't support quality parameter)
-            screenshot_bytes = page.screenshot(
+            screenshot_bytes = await page.screenshot(
                 full_page=True,
                 type='png'
             )
             print("Screenshot taken successfully with Firefox.")
             
-            context.close()
-            browser.close()
+            await context.close()
+            await browser.close()
             
             return screenshot_bytes
             
@@ -271,7 +272,7 @@ def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, 
         print(f"An unexpected error occurred: {e}")
         return f"An error occurred: {e}"
 
-def take_screenshot_with_fallback(url: str) -> bytes:
+async def take_screenshot_with_fallback(url: str) -> bytes:
     """
     Primary function that tries Firefox with fallback options.
     This function consolidates the screenshot logic, including aggressive bypass attempts.
@@ -279,15 +280,15 @@ def take_screenshot_with_fallback(url: str) -> bytes:
     # This structure is simplified to demonstrate modularity.
     # The aggressive fallback logic (Chromium, HTTP) is integrated directly here
     try:
-        return take_screenshot_firefox_enhanced(url)
+        return await take_screenshot_firefox_enhanced(url)
     except Exception as e_firefox_primary:
         print(f"Primary Firefox method failed: {e_firefox_primary}")
         
         # Fallback 1: Try Firefox with minimal configuration and enhanced SSL bypass
         print("Trying Firefox with minimal configuration (fallback 1)...")
         try:
-            with sync_playwright() as p:
-                browser = p.firefox.launch(
+            async with async_playwright() as p:
+                browser = await p.firefox.launch(
                     headless=True,
                     firefox_user_prefs={
                         # Disable Safe Browse
@@ -320,16 +321,16 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                     }
                 )
                 
-                context = browser.new_context(ignore_https_errors=True)
-                page = context.new_page()
-                page.set_viewport_size({"width": 1280, "height": 720})
+                context = await browser.new_context(ignore_https_errors=True)
+                page = await context.new_page()
+                await page.set_viewport_size({"width": 1280, "height": 720})
                 
-                page.goto(url, wait_until="commit", timeout=90000) # Longer timeout
-                page.wait_for_timeout(5000) # Additional wait
+                await page.goto(url, wait_until="commit", timeout=60000) # Longer timeout
+                await page.wait_for_timeout(5000) # Additional wait
                 
-                screenshot_bytes = page.screenshot(full_page=True)
-                context.close()
-                browser.close()
+                screenshot_bytes = await page.screenshot(full_page=True)
+                await context.close()
+                await browser.close()
                 
                 print("Fallback Firefox method (minimal prefs) succeeded.")
                 return screenshot_bytes
@@ -342,8 +343,8 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                 http_url = url.replace('https://', 'http://')
                 print(f"Trying HTTP version: {http_url} (fallback 2)...")
                 try:
-                    with sync_playwright() as p:
-                        browser = p.firefox.launch(
+                    async with async_playwright() as p:
+                        browser = await p.firefox.launch(
                             headless=True,
                             firefox_user_prefs={
                                 "browser.safebrowsing.enabled": False,
@@ -353,13 +354,13 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                             }
                         )
                         
-                        page = browser.new_page()
-                        page.set_viewport_size({"width": 1280, "height": 720})
-                        page.goto(http_url, timeout=60000)
-                        page.wait_for_timeout(3000)
+                        page = await browser.new_page()
+                        await page.set_viewport_size({"width": 1280, "height": 720})
+                        await page.goto(http_url, timeout=45000)
+                        await page.wait_for_timeout(3000)
                         
-                        screenshot_bytes = page.screenshot(full_page=True)
-                        browser.close()
+                        screenshot_bytes = await page.screenshot(full_page=True)
+                        await browser.close()
                         
                         print("HTTP fallback method succeeded.")
                         return screenshot_bytes
@@ -370,8 +371,8 @@ def take_screenshot_with_fallback(url: str) -> bytes:
             # Final fallback: Try Chromium with aggressive bypass
             print("Trying Chromium as final fallback (fallback 3)...")
             try:
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(
                         headless=True,
                         args=[
                             '--disable-web-security',
@@ -415,19 +416,19 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                         ]
                     )
                     
-                    context = browser.new_context(
+                    context = await browser.new_context(
                         ignore_https_errors=True,
                         bypass_csp=True
                     )
                     
-                    page = context.new_page()
-                    page.set_viewport_size({"width": 1280, "height": 720})
-                    page.goto(url, wait_until="commit", timeout=90000)
-                    page.wait_for_timeout(3000)
+                    page = await context.new_page()
+                    await page.set_viewport_size({"width": 1280, "height": 720})
+                    await page.goto(url, wait_until="commit", timeout=45000)
+                    await page.wait_for_timeout(3000)
                     
-                    screenshot_bytes = page.screenshot(full_page=True)
-                    context.close()
-                    browser.close()
+                    screenshot_bytes = await page.screenshot(full_page=True)
+                    await context.close()
+                    await browser.close()
                     
                     print("Chromium fallback method succeeded.")
                     return screenshot_bytes
@@ -451,7 +452,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         str: The AI's detailed analysis and risk assessment.
     """
     # Timeout for AI analysis in seconds for internal timeout to prevent long waits
-    AI_ANALYSIS_TIMEOUT = 180 
+    AI_ANALYSIS_TIMEOUT = 120 
     
     async def analysis_logic():
         # Comprehensive phishing detection prompt
@@ -556,12 +557,13 @@ async def analyze_url_for_phishing(target_url: str) -> str:
 
         # Step 1: Take screenshot
         print("Step 1: Taking screenshot...")
-        screenshot_data = take_screenshot_with_fallback(target_url)
+        screenshot_data = await take_screenshot_with_fallback(target_url)
         print(f"Screenshot captured successfully. Size: {len(screenshot_data)} bytes")
 
         # Step 2: Send to Gemini for analysis
         print("\nStep 2: Analyzing with Gemini...")
-        ai_identification = identify_image_with_gemini_from_bytes(
+        ai_identification = await asyncio.to_thread(
+            identify_image_with_gemini_from_bytes,
             screenshot_data,
             target_url,
             identification_prompt_base
@@ -580,14 +582,18 @@ async def analyze_url_for_phishing(target_url: str) -> str:
     try:
         # Wrap the entire analysis logic in a timeout
         return await asyncio.wait_for(analysis_logic(), timeout=AI_ANALYSIS_TIMEOUT)
+    except asyncio.CancelledError:
+        # This block is new. It catches the cancellation signal.
+        print(f"AI analysis for {target_url} was cancelled.")
+        raise  # Re-raise the exception to ensure the task is properly marked as cancelled.
     except asyncio.TimeoutError:
         print(f"AI analysis for {target_url} timed out after {AI_ANALYSIS_TIMEOUT} seconds.")
         # Return a standardized timeout message
-        return "RISK ASSESSMENT: Medium - AI analysis timed out. This can happen with slow or complex websites."
+        return "[TIMED OUT] AI analysis timed out. This can happen with slow or complex websites."
     except Exception as e:
         print(f"\nProcess failed with error: {e}")
         # Return a standardized error message
-        return "RISK ASSESSMENT: Low - AI analysis failed due to an error."
+        return "[ERROR] AI analysis failed due to an error."
 
 
 # --- Main Execution (only runs when script is executed directly) ---
