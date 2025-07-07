@@ -6,16 +6,15 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 1.0
+# Version: 1.1 (Refactored to allow import to another script)
 #############
 
 import base64
 import requests
 import json
-import os # Still needed for potential error handling/debugging, but no file ops for screenshot
+import os
 from playwright.sync_api import sync_playwright
 
-# --- Configuration ---
 API_KEY = os.environ.get("GEMINI_APIKEY")
 GEMINI_MODEL = "gemini-2.5-flash-preview-05-20" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
@@ -31,7 +30,7 @@ def take_screenshot_firefox_enhanced(url: str) -> bytes:
             browser = p.firefox.launch(
                 headless=True,
                 firefox_user_prefs={
-                    # Disable all Safe Browsing features
+                    # Disable all Safe Browse features
                     "browser.safebrowsing.enabled": False,
                     "browser.safebrowsing.malware.enabled": False,
                     "browser.safebrowsing.phishing.enabled": False,
@@ -205,7 +204,7 @@ def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, 
         }
 
         # Combine the base prompt text with the URL for the AI to analyze
-        full_prompt_for_ai = f"{prompt_text}\n\nAdditionally, consider the URL of this website: {webpage_url}. Does this URL itself (e.g., domain name, subdomains) suggest typo-squatting, brand impersonation, or any other attempt to masquerade as a legitimate site? Provide analysis on both the visual content and the URL."
+        full_prompt_for_ai = f"{prompt_text}\n\nAdditionally, consider the URL of this website: {webpage_url}. Does this URL itself (e.g., domain name, subdomains) suggest typo-squatting, brand impersonation, TLD abuse, or any other attempt to masquerade as a legitimate site? Provide analysis on both the visual content and the URL."
 
         payload = {
             "contents": [
@@ -274,20 +273,23 @@ def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, 
 def take_screenshot_with_fallback(url: str) -> bytes:
     """
     Primary function that tries Firefox with fallback options.
+    This function consolidates the screenshot logic, including aggressive bypass attempts.
     """
+    # This structure is simplified to demonstrate modularity.
+    # The aggressive fallback logic (Chromium, HTTP) is integrated directly here
     try:
         return take_screenshot_firefox_enhanced(url)
-    except Exception as e:
-        print(f"Primary Firefox method failed: {e}")
+    except Exception as e_firefox_primary:
+        print(f"Primary Firefox method failed: {e_firefox_primary}")
         
-        # Fallback: Try Firefox with minimal configuration and enhanced SSL bypass
-        print("Trying Firefox with minimal configuration...")
+        # Fallback 1: Try Firefox with minimal configuration and enhanced SSL bypass
+        print("Trying Firefox with minimal configuration (fallback 1)...")
         try:
             with sync_playwright() as p:
                 browser = p.firefox.launch(
                     headless=True,
                     firefox_user_prefs={
-                        # Disable Safe Browsing
+                        # Disable Safe Browse
                         "browser.safebrowsing.enabled": False,
                         "browser.safebrowsing.malware.enabled": False,
                         "browser.safebrowsing.phishing.enabled": False,
@@ -321,24 +323,23 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                 page = context.new_page()
                 page.set_viewport_size({"width": 1280, "height": 720})
                 
-                # Try with longer timeout and different wait strategy
-                page.goto(url, wait_until="commit", timeout=90000)
-                page.wait_for_timeout(5000)
+                page.goto(url, wait_until="commit", timeout=90000) # Longer timeout
+                page.wait_for_timeout(5000) # Additional wait
                 
                 screenshot_bytes = page.screenshot(full_page=True)
                 context.close()
                 browser.close()
                 
-                print("Fallback Firefox method succeeded.")
+                print("Fallback Firefox method (minimal prefs) succeeded.")
                 return screenshot_bytes
                 
-        except Exception as fallback_error:
-            print(f"Firefox fallback method also failed: {fallback_error}")
+        except Exception as e_firefox_fallback:
+            print(f"Firefox fallback method also failed: {e_firefox_fallback}")
             
-            # Try HTTP instead of HTTPS if URL was HTTPS
+            # Fallback 2: Try HTTP instead of HTTPS if URL was HTTPS
             if url.startswith('https://'):
                 http_url = url.replace('https://', 'http://')
-                print(f"Trying HTTP version: {http_url}")
+                print(f"Trying HTTP version: {http_url} (fallback 2)...")
                 try:
                     with sync_playwright() as p:
                         browser = p.firefox.launch(
@@ -362,11 +363,11 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                         print("HTTP fallback method succeeded.")
                         return screenshot_bytes
                         
-                except Exception as http_error:
-                    print(f"HTTP fallback also failed: {http_error}")
+                except Exception as e_http_fallback:
+                    print(f"HTTP fallback also failed: {e_http_fallback}")
             
             # Final fallback: Try Chromium with aggressive bypass
-            print("Trying Chromium as final fallback...")
+            print("Trying Chromium as final fallback (fallback 3)...")
             try:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(
@@ -382,9 +383,8 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                             '--ignore-certificate-errors',
                             '--ignore-ssl-errors',
                             '--ignore-certificate-errors-spki-list',
-                            '--ignore-certificate-errors-spki-list',
                             '--allow-running-insecure-content',
-                            '--disable-client-side-phishing-detection',
+                            '--disable-client-side-phishing-detection', # Keep for completeness, though noted as ineffective
                             '--disable-component-update',
                             '--disable-default-apps',
                             '--disable-domain-reliability',
@@ -431,38 +431,119 @@ def take_screenshot_with_fallback(url: str) -> bytes:
                     print("Chromium fallback method succeeded.")
                     return screenshot_bytes
                     
-            except Exception as chromium_error:
-                print(f"Chromium fallback also failed: {chromium_error}")
-                raise Exception(f"All methods failed. Firefox: {fallback_error}, Chromium: {chromium_error}")
+            except Exception as e_chromium_fallback:
+                print(f"Chromium fallback also failed: {e_chromium_fallback}")
+                # Re-raise the most informative error encountered
+                raise Exception(f"All screenshot methods failed for {url}. "
+                                f"Primary Firefox error: {e_firefox_primary}. "
+                                f"Fallback Firefox error: {e_firefox_fallback}. "
+                                f"Chromium fallback error: {e_chromium_fallback}.")
 
-# --- Main Execution ---
-if __name__ == "__main__":
-    # Example usage
-    target_url = "https://googlno.com/"  # Your example URL
-    
+
+def analyze_url_for_phishing(target_url: str) -> str:
+    """
+    Orchestrates the screenshot capture and AI analysis for a given URL.
+
+    Args:
+        target_url (str): The URL of the website to analyze.
+
+    Returns:
+        str: The AI's detailed analysis and risk assessment.
+    """
     # Comprehensive phishing detection prompt
     identification_prompt_base = """
-    Analyze this webpage screenshot for any visual or textual indicators of a potential phishing or scam website.
-    Specifically, consider the following:
+    You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and URL examination. Analyze each webpage screenshot for visual or textual indicators of potential phishing or scam websites.
     
-    1. **Branding Consistency:** Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for misspellings, low-quality graphics, or subtle inconsistencies.
+    ## Analysis Framework
+    Evaluate the following elements systematically:
     
-    2. **Design Quality:** Does the overall design look professional, or does it appear hastily assembled with poor alignment, mixed fonts, or pixelated images?
+    1. Branding Consistency
+    Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
+    - Misspellings in brand names or logos
+    - Poor translations or awkward language
+    - Low-quality, pixelated, or distorted graphics
+    - Subtle inconsistencies in colors, fonts, or design elements
+    - Incorrect or outdated brand styling
+
+    2. Design Quality
+    Assess the overall professionalism of the design:
+    - Professional layout vs. hastily assembled appearance
+    - Consistent alignment and spacing
+    - Font consistency throughout the page
+    - Image quality and resolution
+    - Overall visual coherence and attention to detail
+
+    3. Textual Content
+    Examine all visible text for red flags:
+    - Grammatical errors, spelling mistakes, or unusual phrasing
+    - Urgent or threatening language ("Act now!" "Account will be suspended!")
+    - Requests for sensitive information (logins, credit cards, SSN, personal details)
+    - Generic greetings instead of personalized content
+    - Overly dramatic or emotional language
+
+    4. Interactive Elements
+    Describe and evaluate forms, buttons, and links:
+    - What information do they solicit?
+    - Do they appear authentic and professionally designed?
+    - Are they requesting payment information or login credentials?
+    - Are there suspicious payment or credit card collection forms?
+    - Do button labels and form fields match legitimate site standards?
+    - Are there any hidden or misleading links (e.g., "Click here for more info")?
+    - Are there any pop-ups or overlays that obscure content?
+    - Are there any suspicious download links or buttons?
+    - Are there any social media links that appear fake or lead to suspicious profiles?
+
+    5. Sense of Urgency/Threats/Unrealistic Offers
+    Identify manipulation tactics: 
+    - Undue urgency ("Limited time offer!" "Expires today!")
+    - Threats (account suspension, legal action, security breaches)
+    - Offers that seem too good to be true
+    - Fake countdown timers or limited availability claims
+    - Pressure tactics to act immediately
+
+    6. Content Specificity
+    Evaluate the relevance and authenticity of content:
+    - Is content generic or highly specific to a legitimate service?
+    - Does it reference real transactions, accounts, or services?
+    - Are there specific details that would only be known by legitimate companies?
+    - Is the content contextually appropriate for the claimed service?
+
+    7. Security Indicators
+    Look for fraudulent security elements:
+    - Fake security badges or certificates
+    - Misleading trust indicators
+    - Claims of encryption or security without proper implementation
+    - Suspicious SSL indicators or warnings
+    - False testimonials or reviews
+
+    8. URL Analysis
+    Examine the URL for suspicious patterns:
+    - Domain name inconsistencies or typo-squatting
+    - Brand impersonation attempts
+    - Suspicious subdomains or TLD abuse
+    - Character substitution (0 for O, 1 for l, etc.)
+    - Overly long or complex domain structures
+    - Legitimate brand names used as subdomains of suspicious domains
+
+    ## Response Requirements
     
-    3. **Textual Content:** Are there any grammatical errors, unusual phrasing, or urgent/threatening language on the page commonly used in phishing attempts? Identify any requests for sensitive personal information (e.g., logins, credit cards, SSN).
+    ### Detailed Analysis 
+    Provide a comprehensive evaluation addressing each of the 8 points above. Be specific about what you observe and why it's concerning or legitimate.
     
-    4. **Interactive Elements:** Describe any forms, buttons, or links visible on the page. What information do they solicit, and do they appear authentic?
-    
-    5. **Sense of Urgency/Threat/Unrealistic Offers:** Does the content on the page convey undue urgency, threats (e.g., account suspension), or offers that seem too good to be true?
-    
-    6. **Content Specificity:** Is the visible content generic, or is it highly specific to a legitimate service or transaction?
-    
-    7. **Security Indicators:** Based on the visual appearance, can you identify any obvious signs that this might be a fraudulent website attempting to mimic a legitimate service?
-    
-    Please provide a detailed analysis. 
-    
-    Conclude with a risk assessment (Low/Medium/High risk of being a phishing/scam site) and a one sentence explanation of the reasoning behind this assessment with the below format:
-    RISK ASSESSMENT: [Low/Medium/High] - [Reasoning for assessment]
+    ## Risk Assessment Format
+    ### Conclude with exactly this format:
+    RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
+
+    ### Risk Level Guidelines
+    - Low Risk: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure
+    - Medium Risk: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing
+    - High Risk: Multiple clear indicators of phishing/scam; obvious attempts at deception or brand impersonation
+
+    ## Additional Considerations
+    - If uncertain, err on the side of caution and recommend verification through official channels
+    - Note any sophisticated techniques that might fool casual observers
+    - Mention if the site requires additional verification beyond visual analysis
+    - Provide specific actionable advice when possible
     """
     
     print("Starting Firefox-based phishing detection process...")
@@ -470,13 +551,13 @@ if __name__ == "__main__":
     print("-" * 60)
     
     try:
-        # Take screenshot using Firefox with enhanced bypass
+        # Step 1: Take screenshot using Firefox with enhanced bypass
         print("Step 1: Taking screenshot...")
         screenshot_data = take_screenshot_with_fallback(target_url)
         print(f"Screenshot captured successfully. Size: {len(screenshot_data)} bytes")
         
-        # Send to Gemini for analysis
-        print("\nStep 2: Analyzing with Gemini AI...")
+        # Step 2: Send to Gemini for analysis
+        print("\nStep 2: Analyzing with Gemini...")
         ai_identification = identify_image_with_gemini_from_bytes(
             screenshot_data,
             target_url,
@@ -491,11 +572,8 @@ if __name__ == "__main__":
         print(ai_identification)
         print("="*60)
         
-        # Optional: Save screenshot for manual inspection
-        # with open(f"screenshot_{int(time.time())}.png", "wb") as f:
-        #     f.write(screenshot_data)
-        # print(f"\nScreenshot saved as screenshot_{int(time.time())}.png")
-        
+        return ai_identification # Return the analysis result
+
     except Exception as e:
         print(f"\nProcess failed with error: {e}")
         print("\nTroubleshooting suggestions:")
@@ -504,3 +582,16 @@ if __name__ == "__main__":
         print("3. Check if the URL is accessible from your network")
         print("4. Verify your Gemini API key is correctly set")
         print("5. Try with a different URL to test the setup")
+        raise # Re-raise the exception after printing info
+
+# --- Main Execution (only runs when script is executed directly) ---
+if __name__ == "__main__":
+    # Example usage when run as a standalone script
+    target_url = "https://googlno.com/"  # Your example URL
+    
+    try:
+        analysis_result = analyze_url_for_phishing(target_url)
+        # You can do more with analysis_result here, e.g., save to a file
+    except Exception:
+        print("Script execution terminated due to an error.")
+
