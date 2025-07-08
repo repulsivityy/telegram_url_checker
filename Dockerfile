@@ -1,5 +1,5 @@
-# Use Python slim image for smaller size
-FROM python:3.11-slim
+# Pulling specific Playwright Python image for Docker from MSFT
+FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
 
 # Set working directory
 WORKDIR /app
@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY telegram_phishing_bot.py .
+COPY . .
 
 # Create non-root user for security
 RUN useradd -m -r botuser && \
