@@ -18,7 +18,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.1.3
+# version: 2.1.4
 """
 
 import os
@@ -567,7 +567,7 @@ class ResponseFormatter:
                 if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
                     details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
             else:
-                details_lines.append("AI Analysis: ⏳ Still analyzing...")
+                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes 30s to complete...")
 
         details_section = "\n".join(filter(None, details_lines))
 
@@ -778,15 +778,6 @@ class TelegramBot:
                         final_response = self.response_formatter.format_combined_response(item_value, results_map, configured_checker_names)
                         await proc_msg.edit_text(final_response, parse_mode='HTML')
                     return # Exit early
-
-            #logger.info(f"All checks complete for {item_value}.")
-
-            final_response = self.response_formatter.format_combined_response(
-                item_value, 
-                results_map,
-            configured_checker_names
-            )
-            await proc_msg.edit_text(final_response, parse_mode='HTML')
 
         except Exception as e:
             logger.error(f"Error in _check_and_report_item for {item_value}: {e}", exc_info=True)
