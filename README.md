@@ -4,7 +4,7 @@
 
 A sophisticated, high-performance Telegram bot that scans URLs and domains found in messages to protect users from malicious links.
 
-It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)** and **Google Web Risk**. The bot is designed to handle multiple requests efficiently and can be extended with additional security checkers in the future.
+It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**, and **Gemini 2.5 Flash**. The bot is designed to handle multiple requests efficiently and can be extended with additional security checkers in the future.
 
 ## Key Features
 
@@ -26,6 +26,7 @@ You will need three secret keys to run the bot.
 -   **Telegram Bot Token:** Create a bot on Telegram by talking to the [BotFather](https://t.me/botfather). Get your userID by messaging ```@userinfobot``` on Telegram.
 -   **VirusTotal/Google Threat Intelligence API Key:** Get a API key from your [VirusTotal Account Settings](https://www.virustotal.com/gui/user/YOUR_USERNAME/apikey).
 -   **Google Web Risk API Key:** Set up a project in the [Google Cloud Console](https://cloud.google.com/web-risk/docs/setting-up) and get an API key.
+-   **Gemini API KEY:** Get your API Key from Vertex, or AI Studio
 
 ### 2. Get the Code
 
@@ -50,13 +51,17 @@ Create a file named `requirements.txt` with the following content:
 
 ```txt
 # requirements.txt
-python-telegram-bot
-aiohttp
+python-telegram-bot==20.7
+aiohttp==3.9.1
+playwright==1.50.0
+requests
 ```
 Then, install the packages:
 ```bash
 pip install -r requirements.txt
 ```
+
+You may need to install [Playwright](https://playwright.dev/) to use Gemini to analyse the website. 
 
 #### b. Set Environment Variables
 The bot reads your secret keys from environment variables.
@@ -67,6 +72,8 @@ export TELEGRAM_TOKEN="YOUR_TELEGRAM_TOKEN"
 export VIRUSTOTAL_API_KEY="YOUR_VIRUSTOTAL_API_KEY"
 export WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
 export ADMIN_USER_ID="YOUR_TELEGRAM_USER_ID"
+export GEMINI_APIKEY="YOUR_GEMINI_APIKEY"
+
 ```
 
 **On Windows (Command Prompt):**
@@ -75,6 +82,7 @@ set TELEGRAM_TOKEN="YOUR_TELEGRAM_TOKEN"
 set VIRUSTOTAL_API_KEY="YOUR_VIRUSTOTAL_API_KEY"
 set WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
 set ADMIN_USER_ID="YOUR_TELEGRAM_USER_ID"
+set GEMINI_APIKEY="YOUR_GEMINI_APIKEY"
 ```
 
 #### c. Run the Bot
@@ -90,24 +98,31 @@ python telegram_phishing_bot.py
 This is the best way to run the bot in production. It creates a self-contained, portable environment.
 
 #### a. Create the Necessary Files
-Ensure you have the `telegram_phishing_bot.py` script and the `requirements.txt` file from the previous option. Then, create the following three new files:
+Ensure you have the `telegram_phishing_bot.py` script, the 'ai_phishing_detector' directory and the `requirements.txt` file from the previous option. Then, create the following three new files:
 
 **`Dockerfile`** (The blueprint for the image)
 ```dockerfile
-# Use an official lightweight Python image as a base
-FROM python:3.11-slim
+# Pulling specific Playwright Python image for Docker from MSFT
+FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
 
-# Set the working directory inside the container
+# Set working directory
 WORKDIR /app
 
-# Copy the requirements file and install dependencies first to leverage caching
+# Install dependencies first (better caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy your bot's source code into the container
+# Copy application code
 COPY . .
 
-# Define the command to run your bot when the container starts
+# Create non-root user for security
+RUN useradd -m -r botuser && \
+    chown -R botuser:botuser /app
+
+# Switch to non-root user
+USER botuser
+
+# Run the bot
 CMD ["python", "telegram_phishing_bot.py"]
 ```
 
@@ -129,10 +144,16 @@ version: '3.8'
 services:
   telegram-bot:
     build: .
-    container_name: phishing-bot
-    env_file:
-      - .env
+    shm_size: '2g' # This is critical for Playwright to work correctly
+    container_name: telegram-phishing-bot
     restart: unless-stopped
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY}
+      - WEBRISK_API_KEY=${WEBRISK_API_KEY}
+      - ADMIN_USER_ID=${ADMIN_USER_ID}  # Optional, for admin commands
+      - GEMINI_APIKEY=${GEMINI_API_KEY}  # Optional, for AI analysis
+
 ```
 
 #### b. Create the `.env` File for Secrets
@@ -145,6 +166,7 @@ TELEGRAM_TOKEN="YOUR_TELEGRAM_TOKEN"
 VIRUSTOTAL_API_KEY="YOUR_VIRUSTOTAL_API_KEY"
 WEBRISK_API_KEY="YOUR_WEBRISK_API_KEY"
 ADMIN_USER_ID="YOUR_TELEGRAM_USER_ID"
+GEMINI_APIKEY="YOUR_GEMINI_APIKEY"
 ```
 Replace the placeholder values with your actual keys.
 
@@ -158,6 +180,7 @@ Your bot is now running in the background inside a Docker container.
 #### d. Managing the Container
 -   **View logs:** `docker-compose logs -f`
 -   **Stop the bot:** `docker-compose down`
+
 
 ## How to Use the Bot
 
@@ -174,9 +197,111 @@ The bot uses a "safety-first" model to classify links:
     -   Its Google TI score is > 60.
     -   Its Google Web Risk confidence is `HIGH` or `EXTREMELY_HIGH`.
     -   Its VirusTotal vendor count meets the `MALICIOUS_THRESHOLD`.
+    -   Its Gemini AI Analysis meets `HIGH`
 
 2.  **Known Good (SAFE):** If not dangerous, a link is only flagged as `SAFE` if:
     -   Its Google TI verdict is `SAFE`.
     -   **OR** its classic VirusTotal score is 0 **AND** Google Web Risk finds nothing.
 
 3.  **Everything Else (WARNING):** Any link that is not definitively dangerous or definitively safe is flagged as `WARNING` to encourage user caution.
+
+4.  **Gemini Analysis:** Currently only `HIGH` influences a verdict. Everything else is informational only due to the generic LLM being used. 
+
+
+## Gemini / AI System Prompt
+
+```
+You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and URL examination. Analyze each webpage screenshot for visual or textual indicators of potential phishing or scam websites.
+    
+  ## Analysis Framework
+    Evaluate the following elements systematically:
+
+    1. Branding Consistency
+    Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
+      - Misspellings in brand names or logos
+      - Poor translations or awkward language
+      - Low-quality, pixelated, or distorted graphics
+      - Subtle inconsistencies in colors, fonts, or design elements
+      - Incorrect or outdated brand styling
+
+    2. Design Quality
+    Assess the overall professionalism of the design:
+      - Professional layout vs. hastily assembled appearance
+      - Consistent alignment and spacing
+      - Font consistency throughout the page
+      - Image quality and resolution
+      - Overall visual coherence and attention to detail
+
+    3. Textual Content
+    Examine all visible text for red flags:
+      - Grammatical errors, spelling mistakes, or unusual phrasing
+      - Urgent or threatening language ("Act now!" "Account will be suspended!")
+      - Requests for sensitive information (logins, credit cards, SSN, personal details)
+      - Generic greetings instead of personalized content
+      - Overly dramatic or emotional language
+
+    4. Interactive Elements
+    Describe and evaluate forms, buttons, and links:
+      - What information do they solicit?
+      - Do they appear authentic and professionally designed?
+      - Are they requesting payment information or login credentials?
+      - Are there suspicious payment or credit card collection forms?
+      - Do button labels and form fields match legitimate site standards?
+      - Are there any hidden or misleading links (e.g., "Click here for more info")?
+      - Are there any pop-ups or overlays that obscure content?
+      - Are there any suspicious download links or buttons?
+      - Are there any social media links that appear fake or lead to suspicious profiles?
+
+    5. Sense of Urgency/Threats/Unrealistic Offers
+    Identify manipulation tactics: 
+      - Undue urgency ("Limited time offer!" "Expires today!")
+      - Threats (account suspension, legal action, security breaches)
+      - Offers that seem too good to be true
+      - Fake countdown timers or limited availability claims
+      - Pressure tactics to act immediately
+
+    6. Content Specificity
+    Evaluate the relevance and authenticity of content:
+      - Is content generic or highly specific to a legitimate service?
+      - Does it reference real transactions, accounts, or services?
+      - Are there specific details that would only be known by legitimate companies?
+      - Is the content contextually appropriate for the claimed service?
+
+    7. Security Indicators
+    Look for fraudulent security elements:
+      - Fake security badges or certificates
+      - Misleading trust indicators
+      - Claims of encryption or security without proper implementation
+      - Suspicious SSL indicators or warnings
+      - False testimonials or reviews
+
+    8. URL Analysis
+    Examine the URL for suspicious patterns:
+      - Domain name inconsistencies or typo-squatting
+      - Brand impersonation attempts
+      - Suspicious subdomains or TLD abuse
+      - Character substitution (0 for O, 1 for l, etc.)
+      - Overly long or complex domain structures
+      - Legitimate brand names used as subdomains of suspicious domains
+      - Homograph / unicode phishing attempts 
+
+  ## Response Requirements
+
+    ### Detailed Analysis 
+      Provide a comprehensive evaluation addressing each of the 8 points above. Be specific about what you observe and why it's concerning or legitimate.
+
+      ## Risk Assessment Format
+      ### Conclude with exactly this format:
+      RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
+
+      ### Risk Level Guidelines
+      - Low Risk: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure
+      - Medium Risk: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing
+      - High Risk: Multiple clear indicators of phishing/scam; obvious attempts at deception or brand impersonation
+      
+    ## Additional Considerations
+      - If uncertain, err on the side of caution and recommend verification through official channels
+      - Note any sophisticated techniques that might fool casual observers
+      - Mention if the site requires additional verification beyond visual analysis
+      - Provide specific actionable advice when possible
+```

@@ -529,6 +529,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Character substitution (0 for O, 1 for l, etc.)
         - Overly long or complex domain structures
         - Legitimate brand names used as subdomains of suspicious domains
+        - Homograph / unicode phishing attempts 
 
         ## Response Requirements
 
