@@ -567,7 +567,7 @@ class ResponseFormatter:
                 if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
                     details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
             else:
-                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes 30s to complete...")
+                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes ~30s to complete...")
 
         details_section = "\n".join(filter(None, details_lines))
 
