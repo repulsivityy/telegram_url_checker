@@ -3,6 +3,7 @@ version: '3.8'
 services:
   telegram-bot:
     build: .
+    shm_size: '2g'
     container_name: telegram-phishing-bot
     restart: unless-stopped
     environment:
@@ -10,12 +11,4 @@ services:
       - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY}
       - WEBRISK_API_KEY=${WEBRISK_API_KEY}
       - ADMIN_USER_ID=${ADMIN_USER_ID}  # Optional, for admin commands
-    # Resource limits (optional, adjust / remove as needed)
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-        reservations:
-          cpus: '0.25'
-          memory: 128M
+      - GEMINI_APIKEY=${GEMINI_API_KEY}  # Optional, for AI analysis
