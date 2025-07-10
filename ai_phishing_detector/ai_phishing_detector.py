@@ -165,7 +165,10 @@ async def take_screenshot_firefox_enhanced(url: str) -> dict:
             # Extract all form actions
             forms = await page.eval_on_selector_all('form', 'elements => elements.map(el => el.action)')
             
-            print(f"Found {len(links)} links and {len(forms)} forms.")
+            # Get full page HTML
+            html_content = await page.content()
+            
+            print(f"Found {len(links)} links, {len(forms)} forms, and extracted HTML.")
             # --- End of new data extraction ---
 
             screenshot_bytes = await page.screenshot(full_page=True, type='png')
@@ -178,33 +181,98 @@ async def take_screenshot_firefox_enhanced(url: str) -> dict:
                 "screenshot": screenshot_bytes,
                 "links": links,
                 "forms": forms,
+                "html": html_content,
             }
             
     except Exception as e:
         print(f"Firefox analysis failed: {e}")
         raise
 
+def _clean_html_for_analysis(html_content: str, max_length: int = 8000) -> str:
+    """
+    Clean and truncate HTML content for AI analysis.
+    Removes excessive whitespace and limits length to stay within token limits.
+    """
+    if not html_content:
+        return "HTML not available."
+    
+    import re
+    
+    # Remove script and style content (they're usually not relevant for phishing detection)
+    html_content = re.sub(r'<script.*?</script>', '[SCRIPT REMOVED]', html_content, flags=re.DOTALL | re.IGNORECASE)
+    html_content = re.sub(r'<style.*?</style>', '[STYLE REMOVED]', html_content, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove excessive whitespace
+    html_content = re.sub(r'\s+', ' ', html_content)
+    html_content = html_content.strip()
+    
+    # Truncate if too long, but try to keep complete tags
+    if len(html_content) > max_length:
+        html_content = html_content[:max_length]
+        # Try to end at a complete tag
+        last_tag_end = html_content.rfind('>')
+        if last_tag_end > max_length * 0.8:  # Only truncate if we're not losing too much
+            html_content = html_content[:last_tag_end + 1]
+        html_content += "\n[... HTML truncated for analysis ...]"
+    
+    return html_content
+
 def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, prompt_text: str) -> str:
     """
     Sends image bytes, DOM data, and URL to the Gemini API for analysis.
     """
-    print(f"Sending image, DOM data, and URL '{webpage_url}' to Gemini API")
+    print(f"Sending image, DOM data, and HTML content to Gemini API for '{webpage_url}'")
     try:
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         headers = {'Content-Type': 'application/json'}
 
-        # Create a summary of the DOM data to append to the main prompt
-        dom_summary = (
-            f"\n\n## Technical DOM Analysis\n"
-            f"In addition to the screenshot, the following technical data was extracted from the page's DOM:\n"
-            f"**Links Found ({len(dom_data.get('links', []))})**: {json.dumps(dom_data.get('links', []))}\n"
-            f"**Form Actions Found ({len(dom_data.get('forms', []))})**: {json.dumps(dom_data.get('forms', []))}\n\n"
-            f"**Instructions**: Analyze these links and form actions. Do they point to suspicious domains, unexpected locations, or known malicious hosts? "
-            f"Cross-reference this technical data with the visual elements in the screenshot and the page's URL as part of your overall assessment, particularly for points 4 and 8 of the Analysis Framework."
+        # ENHANCED: Create comprehensive technical analysis section
+        links = dom_data.get('links', [])
+        forms = dom_data.get('forms', [])
+        html_content = dom_data.get('html', '')
+        
+        # Clean HTML for better analysis (remove excessive whitespace, limit length)
+        cleaned_html = _clean_html_for_analysis(html_content)
+
+        # Create enhanced technical summary
+        technical_summary = (
+            f"\n\n## ENHANCED TECHNICAL ANALYSIS\n"
+            f"**CRITICAL INSTRUCTION**: The following technical data extracted from the webpage's source code may reveal deception not visible in the screenshot. A phishing site might DISPLAY legitimate branding but have malicious underlying code.\n\n"
+            f"### 1. Links Analysis ({len(links)} found)\n"
+            f"**All Link Destinations**: {json.dumps(links[:25])}\n"  # Limit to first 25 links
+            f"{f'[... and {len(links)-25} more links]' if len(links) > 25 else ''}\n\n"
+            f"### 2. Form Actions Analysis ({len(forms)} found)\n"
+            f"**Form Submission Targets**: {json.dumps(forms)}\n\n"
+            f"### 3. HTML Source Code Analysis\n"
+            f"**Page HTML Structure** (cleaned for analysis):\n"
+            f"```html\n{cleaned_html}\n```\n\n"
+            f"### 4. Cross-Reference Analysis Required\n"
+            f"**CRITICAL CHECKS**:\n"
+            f"- Do the extracted links match what's visually presented in the screenshot?\n"
+            f"- Are there hidden forms or links not visible in the screenshot?\n"
+            f"- Does the HTML title/metadata match the visual branding?\n"
+            f"- Are there any suspicious redirects or iframe content?\n"
+            f"- Do legitimate-looking buttons actually link to malicious domains?\n"
+            f"- Are there any obfuscated or suspicious JavaScript elements?\n"
+            f"- Is the site impersonating another domain through HTML content?\n\n"
+            f"### 5. Domain Verification\n"
+            f"**Current URL**: {webpage_url}\n"
+            f"**Check for**:\n"
+            f"- HTML references to different domains than the current URL\n"
+            f"- Mixed content (HTTPS site loading HTTP resources)\n"
+            f"- Suspicious external resources or CDN usage\n"
+            f"- Domain spoofing in HTML content vs actual URL\n\n"
+            f"### Analysis Instructions:\n"
+            f"1. **Visual vs Technical Mismatch**: Look for discrepancies between what the screenshot shows and what the HTML/links reveal\n"
+            f"2. **Hidden Elements**: Identify any suspicious elements in HTML that aren't visible in screenshot\n"
+            f"3. **Link Destination Analysis**: Verify if visible buttons/links actually go where they claim\n"
+            f"4. **Content Authenticity**: Check if HTML source matches the legitimate site it appears to impersonate\n"
+            f"5. **Sophisticated Techniques**: Look for advanced phishing techniques like iframe overlays, legitimate link mixing with malicious forms, etc.\n\n"
+            f"**REMEMBER**: A single legitimate link (like google.com) does NOT make a phishing site legitimate. Focus on the overall context and any deceptive elements."
         )
 
-        # Combine the base prompt, DOM summary, and URL for the AI
-        full_prompt_for_ai = f"{prompt_text}{dom_summary}"
+        # Combine the base prompt, technical summary, and URL for the AI
+        full_prompt_for_ai = f"{prompt_text}{technical_summary}"
 
         payload = {
             "contents": [
@@ -301,7 +369,7 @@ async def take_screenshot_with_fallback(url: str) -> dict:
                 await browser.close()
                 print("Fallback Firefox method (minimal prefs) succeeded.")
                 # Return screenshot with empty DOM data to maintain type consistency
-                return {"screenshot": screenshot_bytes, "links": [], "forms": []}
+                return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
                 
         except Exception as e_firefox_fallback:
             print(f"Firefox fallback method also failed: {e_firefox_fallback}")
@@ -326,7 +394,7 @@ async def take_screenshot_with_fallback(url: str) -> dict:
                         screenshot_bytes = await page.screenshot(full_page=True)
                         await browser.close()
                         print("HTTP fallback method succeeded.")
-                        return {"screenshot": screenshot_bytes, "links": [], "forms": []}
+                        return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
                         
                 except Exception as e_http_fallback:
                     print(f"HTTP fallback also failed: {e_http_fallback}")
@@ -363,7 +431,7 @@ async def take_screenshot_with_fallback(url: str) -> dict:
                     await context.close()
                     await browser.close()
                     print("Chromium fallback method succeeded.")
-                    return {"screenshot": screenshot_bytes, "links": [], "forms": []}
+                    return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
                     
             except Exception as e_chromium_fallback:
                 print(f"Chromium fallback also failed: {e_chromium_fallback}")
@@ -386,22 +454,33 @@ async def analyze_url_for_phishing(target_url: str) -> str:
     AI_ANALYSIS_TIMEOUT = 120 
     
     async def analysis_logic():
-        # Comprehensive phishing detection prompt
+        # ENHANCED Comprehensive phishing detection prompt
         identification_prompt_base = """
-        You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and URL examination. Analyze each webpage screenshot for visual or textual indicators of potential phishing or scam websites.
-    
+        You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and comprehensive technical analysis of the underlying HTML/DOM structure.
+
+        ## CRITICAL ANALYSIS APPROACH
+        **IMPORTANT**: Phishing sites often display legitimate-looking content while having malicious underlying code. A site showing legitimate branding with some legitimate links may still be a phishing site if it's impersonating a brand or collecting credentials fraudulently.
+
         ## Analysis Framework
         Evaluate the following elements systematically:
 
-        1. Branding Consistency
+        1. **Visual vs Technical Cross-Reference** (MOST IMPORTANT)
+        Are there discrepancies between what the screenshot shows and what the technical analysis reveals?
+        - Does the visual branding match the actual domain and HTML content?
+        - Do visible buttons and links actually go where they appear to lead?
+        - Are there hidden forms or elements not visible in the screenshot?
+        - Is the site legitimately from the domain it claims to represent?
+        - Does the URL match the branding displayed on the page?
+
+        2. **Branding Consistency**
         Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
         - Misspellings in brand names or logos
-        - Poor translations or awkward language
+        - Poor translations or awkward language  
         - Low-quality, pixelated, or distorted graphics
         - Subtle inconsistencies in colors, fonts, or design elements
         - Incorrect or outdated brand styling
 
-        2. Design Quality
+        3. **Design Quality**
         Assess the overall professionalism of the design:
         - Professional layout vs. hastily assembled appearance
         - Consistent alignment and spacing
@@ -409,7 +488,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Image quality and resolution
         - Overall visual coherence and attention to detail
 
-        3. Textual Content
+        4. **Textual Content**
         Examine all visible text for red flags:
         - Grammatical errors, spelling mistakes, or unusual phrasing
         - Urgent or threatening language ("Act now!" "Account will be suspended!")
@@ -417,34 +496,33 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Generic greetings instead of personalized content
         - Overly dramatic or emotional language
 
-        4. Interactive Elements
-        Describe and evaluate forms, buttons, and links. **Use the extracted links and form data from the Technical DOM Analysis to verify where these elements actually lead.**
-        - What information do they solicit?
-        - Do they appear authentic and professionally designed?
-        - Are they requesting payment information or login credentials?
-        - Are there suspicious payment or credit card collection forms?
+        5. **Interactive Elements & Technical Verification**
+        Cross-reference visible elements with the extracted technical data:
+        - What information do forms actually collect vs. what they claim?
+        - Where do links and buttons actually lead vs. where they appear to go?
+        - Are there suspicious payment or credential collection forms?
         - Do button labels and form fields match legitimate site standards?
-        - Are there any hidden or misleading links (e.g., "Click here for more info")?
+        - Are there any hidden or misleading elements in the HTML?
         - Are there any pop-ups or overlays that obscure content?
         - Are there any suspicious download links or buttons?
         - Are there any social media links that appear fake or lead to suspicious profiles?
 
-        5. Sense of Urgency/Threats/Unrealistic Offers
-        Identify manipulation tactics: 
+        6. **Sense of Urgency/Threats/Unrealistic Offers**
+        Identify manipulation tactics:
         - Undue urgency ("Limited time offer!" "Expires today!")
         - Threats (account suspension, legal action, security breaches)
         - Offers that seem too good to be true
         - Fake countdown timers or limited availability claims
         - Pressure tactics to act immediately
 
-        6. Content Specificity
+        7. **Content Specificity**
         Evaluate the relevance and authenticity of content:
         - Is content generic or highly specific to a legitimate service?
         - Does it reference real transactions, accounts, or services?
         - Are there specific details that would only be known by legitimate companies?
         - Is the content contextually appropriate for the claimed service?
 
-        7. Security Indicators
+        8. **Security Indicators**
         Look for fraudulent security elements:
         - Fake security badges or certificates
         - Misleading trust indicators
@@ -452,35 +530,57 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Suspicious SSL indicators or warnings
         - False testimonials or reviews
 
-        8. URL Analysis
-        Examine the URL for suspicious patterns. **Correlate this with the domains found in the extracted links and forms from the Technical DOM Analysis.**
-        - Domain name inconsistencies or typo-squatting
+        9. **URL vs Content Analysis**
+        Examine the relationship between the URL and content:
+        - Does the domain match the branding and content shown?
+        - Are there domain spoofing attempts or typosquatting?
         - Brand impersonation attempts
         - Suspicious subdomains or TLD abuse
         - Character substitution (0 for O, 1 for l, etc.)
         - Overly long or complex domain structures
-        - Legitimate brand names used as subdomains of suspicious domains
-        - Homograph / unicode phishing attempts 
+        - Homograph / unicode phishing attempts
+
+        10. **HTML Source Code Analysis**
+        Examine the full HTML source code provided in the Technical Analysis section. Look for:
+        - Suspicious JavaScript or obfuscated code that could redirect users or steal data
+        - Hidden iframes or elements designed to load malicious content
+        - Unusual comments or non-standard HTML structure that might hide malicious intent
+        - Embedded scripts from untrusted or unknown third-party domains
+        - Form actions that redirect to suspicious domains
+        - Any other anomalies that suggest deceptive practices
+        - Discrepancies between what's visible and what's in the code
+
+        11. **Advanced Deception Detection**
+        Look for sophisticated phishing techniques:
+        - Legitimate links mixed with malicious forms to build credibility
+        - Iframe overlays hiding malicious content
+        - Partial legitimate functionality to build trust
+        - Progressive credential harvesting techniques
+        - Social engineering through legitimate-appearing elements
 
         ## Response Requirements
 
-        ### Detailed Analysis 
-        Provide a comprehensive evaluation addressing each of the 8 points above. Be specific about what you observe and why it's concerning or legitimate.
+        ### Detailed Analysis
+        Provide a comprehensive evaluation addressing each point above. **Pay special attention to any discrepancies between visual appearance and technical reality.**
+
+        ### CRITICAL: Do not be misled by isolated legitimate elements
+        A phishing site may include some legitimate links or references to build credibility while still being malicious overall. Focus on the overall authenticity and whether the site is legitimately representing the brand it appears to show.
 
         ## Risk Assessment Format
         ### Conclude with exactly this format:
         RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
 
         ### Risk Level Guidelines
-        - Low Risk: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure
-        - Medium Risk: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing
-        - High Risk: Multiple clear indicators of phishing/scam; obvious attempts at deception or brand impersonation
+        - **Low Risk**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
+        - **Medium Risk**: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing requiring further verification
+        - **High Risk**: Clear indicators of phishing/scam; obvious attempts at deception, brand impersonation, or technical elements that contradict visual presentation
 
         ## Additional Considerations
         - If uncertain, err on the side of caution and recommend verification through official channels
         - Note any sophisticated techniques that might fool casual observers
         - Mention if the site requires additional verification beyond visual analysis
         - Provide specific actionable advice when possible
+        - **Remember**: The presence of some legitimate links does not automatically make a site legitimate
         """
 
         print("Starting enhanced phishing detection process...")
@@ -506,7 +606,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         )
 
         print("\n" + "="*60)
-        print("PHISHING DETECTION ANALYSIS RESULTS")
+        print("ENHANCED PHISHING DETECTION ANALYSIS RESULTS")
         print("="*60)
         print(f"URL: {target_url}")
         print("-" * 60)
@@ -530,7 +630,6 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         print(f"\nProcess failed with error: {e}")
         # Return a standardized error message
         return "[ERROR] AI analysis failed due to an error."
-
 
 # --- Main Execution (only runs when script is executed directly) ---
 if __name__ == "__main__":
