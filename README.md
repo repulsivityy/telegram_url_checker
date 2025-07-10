@@ -4,7 +4,9 @@
 
 A sophisticated, high-performance Telegram bot that scans URLs and domains found in messages to protect users from malicious links.
 
-It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**, and **Gemini 2.5 Flash**. The bot is designed to ~~handle multiple requests efficiently~~ and can be extended with additional security checkers in the future.
+It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**. **Gemini 2.5 Flash** is used to analyse the website via Playwright. 
+
+The bot is designed to ~~handle multiple requests efficiently~~ and can be extended with additional security checkers in the future.
 
 ## Key Features
 
@@ -12,9 +14,16 @@ It provides a clear, standardized response format by assessing links against mul
 -   **Intelligent Conditional Polling:** Performs a long, deep scan on new, unknown URLs *only if* initial results from other sources are clean. This provides thoroughness without unnecessary waiting.
 -   **Customizable Polling Schedule:** Uses a non-linear backoff schedule for deep scans (`60s`, `+45s`, `+30s`...) to efficiently wait for long-running analyses.
 -   **Safe, Un-clickable Links:** Automatically "defangs" all URLs and domains in its responses (e.g., `example[.]com` and `http[:]//`) to prevent accidental clicks on potentially malicious links.
--   **Concurrent & Asynchronous:** Processes multiple links from a single message at the same time for incredibly fast response times.
+-   ~~**Concurrent & Asynchronous:** Processes multiple links from a single message at the same time for incredibly fast response times.~~
 -   **Efficient & Stable:** Manages network resources with an intelligent session manager that closes connections during idle periods. Handles large numbers of links by processing them in manageable chunks.
 -   **Degrades Gracefully:** Should you not have any of the services (eg, Web Risk), the code doesn't crash and continues to run should a component be missing. 
+
+### Features to build
+[x] DOM inspection with AIthu
+[x] HTML inspection with AI
+[] (curated) Attributions if using GTI key (with relevant license)
+[] More security checkers (eg, URLscan, Shodan, alienvault, etc)
+[] More concrete logic checks
 
 ## Setup
 
@@ -62,6 +71,10 @@ pip install -r requirements.txt
 ```
 
 You may need to install [Playwright](https://playwright.dev/) to use Gemini to analyse the website. 
+```bash
+# After installing pip packages, run: 
+playwright install
+```
 
 #### b. Set Environment Variables
 The bot reads your secret keys from environment variables.
@@ -206,102 +219,3 @@ The bot uses a "safety-first" model to classify links:
 3.  **Everything Else (WARNING):** Any link that is not definitively dangerous or definitively safe is flagged as `WARNING` to encourage user caution.
 
 4.  **Gemini Analysis:** Currently only `HIGH` influences a verdict. Everything else is informational only due to the generic LLM being used. 
-
-
-## Gemini / AI System Prompt
-
-```
-You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and URL examination. Analyze each webpage screenshot for visual or textual indicators of potential phishing or scam websites.
-    
-  ## Analysis Framework
-    Evaluate the following elements systematically:
-
-    1. Branding Consistency
-    Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
-      - Misspellings in brand names or logos
-      - Poor translations or awkward language
-      - Low-quality, pixelated, or distorted graphics
-      - Subtle inconsistencies in colors, fonts, or design elements
-      - Incorrect or outdated brand styling
-
-    2. Design Quality
-    Assess the overall professionalism of the design:
-      - Professional layout vs. hastily assembled appearance
-      - Consistent alignment and spacing
-      - Font consistency throughout the page
-      - Image quality and resolution
-      - Overall visual coherence and attention to detail
-
-    3. Textual Content
-    Examine all visible text for red flags:
-      - Grammatical errors, spelling mistakes, or unusual phrasing
-      - Urgent or threatening language ("Act now!" "Account will be suspended!")
-      - Requests for sensitive information (logins, credit cards, SSN, personal details)
-      - Generic greetings instead of personalized content
-      - Overly dramatic or emotional language
-
-    4. Interactive Elements
-    Describe and evaluate forms, buttons, and links:
-      - What information do they solicit?
-      - Do they appear authentic and professionally designed?
-      - Are they requesting payment information or login credentials?
-      - Are there suspicious payment or credit card collection forms?
-      - Do button labels and form fields match legitimate site standards?
-      - Are there any hidden or misleading links (e.g., "Click here for more info")?
-      - Are there any pop-ups or overlays that obscure content?
-      - Are there any suspicious download links or buttons?
-      - Are there any social media links that appear fake or lead to suspicious profiles?
-
-    5. Sense of Urgency/Threats/Unrealistic Offers
-    Identify manipulation tactics: 
-      - Undue urgency ("Limited time offer!" "Expires today!")
-      - Threats (account suspension, legal action, security breaches)
-      - Offers that seem too good to be true
-      - Fake countdown timers or limited availability claims
-      - Pressure tactics to act immediately
-
-    6. Content Specificity
-    Evaluate the relevance and authenticity of content:
-      - Is content generic or highly specific to a legitimate service?
-      - Does it reference real transactions, accounts, or services?
-      - Are there specific details that would only be known by legitimate companies?
-      - Is the content contextually appropriate for the claimed service?
-
-    7. Security Indicators
-    Look for fraudulent security elements:
-      - Fake security badges or certificates
-      - Misleading trust indicators
-      - Claims of encryption or security without proper implementation
-      - Suspicious SSL indicators or warnings
-      - False testimonials or reviews
-
-    8. URL Analysis
-    Examine the URL for suspicious patterns:
-      - Domain name inconsistencies or typo-squatting
-      - Brand impersonation attempts
-      - Suspicious subdomains or TLD abuse
-      - Character substitution (0 for O, 1 for l, etc.)
-      - Overly long or complex domain structures
-      - Legitimate brand names used as subdomains of suspicious domains
-      - Homograph / unicode phishing attempts 
-
-  ## Response Requirements
-
-    ### Detailed Analysis 
-      Provide a comprehensive evaluation addressing each of the 8 points above. Be specific about what you observe and why it's concerning or legitimate.
-
-      ## Risk Assessment Format
-      ### Conclude with exactly this format:
-      RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
-
-      ### Risk Level Guidelines
-      - Low Risk: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure
-      - Medium Risk: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing
-      - High Risk: Multiple clear indicators of phishing/scam; obvious attempts at deception or brand impersonation
-      
-    ## Additional Considerations
-      - If uncertain, err on the side of caution and recommend verification through official channels
-      - Note any sophisticated techniques that might fool casual observers
-      - Mention if the site requires additional verification beyond visual analysis
-      - Provide specific actionable advice when possible
-```
