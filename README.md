@@ -188,13 +188,13 @@ Replace the placeholder values with your actual keys.
 #### c. Build and Run the Container
 With all the files in place, open a terminal in your project directory and run:
 ```bash
-docker-compose up --build -d
+docker compose up --build -d
 ```
 Your bot is now running in the background inside a Docker container.
 
 #### d. Managing the Container
--   **View logs:** `docker-compose logs -f`
--   **Stop the bot:** `docker-compose down`
+-   **View logs:** `docker compose logs -f`
+-   **Stop the bot:** `docker compose down`
 
 
 ## How to Use the Bot
