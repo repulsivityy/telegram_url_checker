@@ -6,7 +6,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 1.4.4
+# Version: 1.5
 #############
 
 import base64
@@ -20,12 +20,12 @@ API_KEY = os.environ.get("GEMINI_APIKEY")
 GEMINI_MODEL = "gemini-2.5-flash-preview-05-20" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
-async def take_screenshot_firefox_enhanced(url: str) -> bytes:
+async def take_screenshot_firefox_enhanced(url: str) -> dict:
     """
-    Takes a full-page screenshot using Firefox with enhanced Safe Browsing bypass.
+    Takes a full-page screenshot, extracts DOM information (links, forms), and returns them.
     Includes warning page detection and bypass attempts.
     """
-    print(f"Taking screenshot with Firefox (enhanced): {url}")  
+    print(f"Analyzing and taking screenshot with Firefox (enhanced): {url}")
     try:
         async with async_playwright() as p:
             browser = await p.firefox.launch(
@@ -101,13 +101,12 @@ async def take_screenshot_firefox_enhanced(url: str) -> bytes:
                 ignore_https_errors=True,
                 bypass_csp=True,
                 accept_downloads=False,
-                java_script_enabled=True,  # Keep JS enabled to handle any dynamic content
+                java_script_enabled=True,
                 viewport={"width": 1280, "height": 720}
             )
             
             page = await context.new_page()
             
-            # Set additional headers to look more like a regular browser
             await page.set_extra_http_headers({
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
@@ -117,48 +116,32 @@ async def take_screenshot_firefox_enhanced(url: str) -> bytes:
                 'Upgrade-Insecure-Requests': '1'
             })
             
-            # Navigate to the URL
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as nav_error:
                 print(f"Navigation error: {nav_error}")
-                # Try with a simpler wait condition
                 await page.goto(url, wait_until="commit", timeout=30000)
             
-            # Wait for page to load
             await page.wait_for_timeout(3000)
             
-            # Check for Firefox-specific warning pages and bypass them
             try:
                 page_content = (await page.content()).lower()
                 page_text = (await page.text_content('body')).lower() if await page.locator('body').count() > 0 else ""
-
                 
-                # Firefox warning indicators
                 firefox_warnings = [
-                    'deceptive site ahead',
-                    'reported attack page',
-                    'this connection is not secure',
-                    'warning: potential security risk ahead',
-                    'mozilla firefox has blocked this page',
+                    'deceptive site ahead', 'reported attack page', 'this connection is not secure',
+                    'warning: potential security risk ahead', 'mozilla firefox has blocked this page',
                     'this site has been reported as unsafe'
                 ]
                 
                 if any(warning in page_text or warning in page_content for warning in firefox_warnings):
                     print("Firefox security warning detected, attempting bypass...")
-                    
-                    # Try to find and click bypass buttons
                     bypass_selectors = [
-                        'button:has-text("Advanced")',
-                        'button[id*="advancedButton"]',
-                        'button[id*="exceptionDialogButton"]',
-                        'button:has-text("Accept the Risk and Continue")',
-                        'button:has-text("Continue to site")',
-                        'a:has-text("Continue")',
-                        'a[id*="proceed"]',
-                        'button[id*="proceed"]'
+                        'button:has-text("Advanced")', 'button[id*="advancedButton"]',
+                        'button[id*="exceptionDialogButton"]', 'button:has-text("Accept the Risk and Continue")',
+                        'button:has-text("Continue to site")', 'a:has-text("Continue")',
+                        'a[id*="proceed"]', 'button[id*="proceed"]'
                     ]
-                    
                     for selector in bypass_selectors:
                         try:
                             element = await page.wait_for_selector(selector, timeout=2000)
@@ -169,71 +152,77 @@ async def take_screenshot_firefox_enhanced(url: str) -> bytes:
                                 break
                         except:
                             continue
-                    
-                    # Additional wait after bypass attempt
                     await page.wait_for_timeout(3000)
-                
             except Exception as warning_error:
                 print(f"Warning bypass error (continuing): {warning_error}")
+
+            # --- Start of new data extraction ---
+            print("Extracting DOM information...")
             
-            # Take the screenshot (PNG doesn't support quality parameter)
-            screenshot_bytes = await page.screenshot(
-                full_page=True,
-                type='png'
-            )
+            # Extract all links
+            links = await page.eval_on_selector_all('a', 'elements => elements.map(el => el.href)')
+            
+            # Extract all form actions
+            forms = await page.eval_on_selector_all('form', 'elements => elements.map(el => el.action)')
+            
+            print(f"Found {len(links)} links and {len(forms)} forms.")
+            # --- End of new data extraction ---
+
+            screenshot_bytes = await page.screenshot(full_page=True, type='png')
             print("Screenshot taken successfully with Firefox.")
             
             await context.close()
             await browser.close()
             
-            return screenshot_bytes
+            return {
+                "screenshot": screenshot_bytes,
+                "links": links,
+                "forms": forms,
+            }
             
     except Exception as e:
-        print(f"Firefox screenshot failed: {e}")
+        print(f"Firefox analysis failed: {e}")
         raise
 
-def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, prompt_text: str) -> str:
+def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, prompt_text: str) -> str:
     """
-    Sends image bytes and the target URL to the Gemini API for identification/description.
+    Sends image bytes, DOM data, and URL to the Gemini API for analysis.
     """
-    print(f"Sending image (bytes) and URL '{webpage_url}' to Gemini API")
+    print(f"Sending image, DOM data, and URL '{webpage_url}' to Gemini API")
     try:
-        # Encode the image bytes to base64
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        headers = {'Content-Type': 'application/json'}
 
-        headers = {
-            'Content-Type': 'application/json',
-        }
+        # Create a summary of the DOM data to append to the main prompt
+        dom_summary = (
+            f"\n\n## Technical DOM Analysis\n"
+            f"In addition to the screenshot, the following technical data was extracted from the page's DOM:\n"
+            f"**Links Found ({len(dom_data.get('links', []))})**: {json.dumps(dom_data.get('links', []))}\n"
+            f"**Form Actions Found ({len(dom_data.get('forms', []))})**: {json.dumps(dom_data.get('forms', []))}\n\n"
+            f"**Instructions**: Analyze these links and form actions. Do they point to suspicious domains, unexpected locations, or known malicious hosts? "
+            f"Cross-reference this technical data with the visual elements in the screenshot and the page's URL as part of your overall assessment, particularly for points 4 and 8 of the Analysis Framework."
+        )
 
-        # Combine the base prompt text with the URL for the AI to analyze
-        full_prompt_for_ai = f"{prompt_text}\n\nAdditionally, consider the URL of this website: {webpage_url}. Does this URL itself (e.g., domain name, subdomains) suggest typo-squatting, brand impersonation, TLD abuse, or any other attempt to masquerade as a legitimate site? Provide analysis on both the visual content and the URL."
+        # Combine the base prompt, DOM summary, and URL for the AI
+        full_prompt_for_ai = f"{prompt_text}{dom_summary}"
 
         payload = {
             "contents": [
                 {
                     "role": "user",
                     "parts": [
-                        {
-                            "inlineData": {
-                                "mimeType": "image/png",
-                                "data": base64_image
-                            }
-                        },
-                        {
-                            "text": full_prompt_for_ai
-                        }
+                        {"inlineData": {"mimeType": "image/png", "data": base64_image}},
+                        {"text": full_prompt_for_ai},
                     ]
                 }
             ]
         }
 
-        # Make the API request
         response = requests.post(GEMINI_API_URL, headers=headers, data=json.dumps(payload))
         response.raise_for_status()
-
         result = response.json()
 
-        # Extract the text from the response
+        # Extract the text from the response - THIS LOGIC IS PRESERVED FROM THE ORIGINAL
         if result.get("candidates"):
             candidate = result["candidates"][0]
             if candidate.get("content"):
@@ -272,14 +261,13 @@ def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, 
         print(f"An unexpected error occurred: {e}")
         return f"An error occurred: {e}"
 
-async def take_screenshot_with_fallback(url: str) -> bytes:
+async def take_screenshot_with_fallback(url: str) -> dict:
     """
-    Primary function that tries Firefox with fallback options.
+    Primary function that tries Firefox with fallback options, ensuring a consistent return type.
     This function consolidates the screenshot logic, including aggressive bypass attempts.
     """
-    # This structure is simplified to demonstrate modularity.
-    # The aggressive fallback logic (Chromium, HTTP) is integrated directly here
     try:
+        # The primary, enhanced method returns a full data dictionary
         return await take_screenshot_firefox_enhanced(url)
     except Exception as e_firefox_primary:
         print(f"Primary Firefox method failed: {e_firefox_primary}")
@@ -291,49 +279,29 @@ async def take_screenshot_with_fallback(url: str) -> bytes:
                 browser = await p.firefox.launch(
                     headless=True,
                     firefox_user_prefs={
-                        # Disable Safe Browse
-                        "browser.safebrowsing.enabled": False,
-                        "browser.safebrowsing.malware.enabled": False,
-                        "browser.safebrowsing.phishing.enabled": False,
-                        
-                        # Enhanced SSL/Certificate bypass
-                        "security.ssl.require_safe_negotiation": False,
-                        "security.ssl.treat_unsafe_negotiation_as_broken": False,
-                        "security.ssl3.rsa_des_ede3_sha": True,
-                        "security.tls.hello_downgrade_check": False,
-                        "security.warn_entering_secure": False,
-                        "security.warn_entering_weak": False,
-                        "security.warn_leaving_secure": False,
-                        "security.warn_submit_insecure": False,
-                        "security.warn_viewing_mixed": False,
-                        "dom.security.https_only_mode": False,
-                        "security.mixed_content.block_active_content": False,
-                        "security.mixed_content.block_display_content": False,
-                        
-                        # Certificate handling
-                        "security.default_personal_cert": "Ask Every Time",
-                        "security.ssl.errorReporting.enabled": False,
-                        "security.ssl.errorReporting.automatic": False,
-                        
-                        # Additional network settings
-                        "network.stricttransportsecurity.preloadlist": False,
-                        "security.cert_pinning.enforcement_level": 0,
+                        "browser.safebrowsing.enabled": False, "browser.safebrowsing.malware.enabled": False,
+                        "browser.safebrowsing.phishing.enabled": False, "security.ssl.require_safe_negotiation": False,
+                        "security.ssl.treat_unsafe_negotiation_as_broken": False, "security.ssl3.rsa_des_ede3_sha": True,
+                        "security.tls.hello_downgrade_check": False, "security.warn_entering_secure": False,
+                        "security.warn_entering_weak": False, "security.warn_leaving_secure": False,
+                        "security.warn_submit_insecure": False, "security.warn_viewing_mixed": False,
+                        "dom.security.https_only_mode": False, "security.mixed_content.block_active_content": False,
+                        "security.mixed_content.block_display_content": False, "security.default_personal_cert": "Ask Every Time",
+                        "security.ssl.errorReporting.enabled": False, "security.ssl.errorReporting.automatic": False,
+                        "network.stricttransportsecurity.preloadlist": False, "security.cert_pinning.enforcement_level": 0,
                     }
                 )
-                
                 context = await browser.new_context(ignore_https_errors=True)
                 page = await context.new_page()
                 await page.set_viewport_size({"width": 1280, "height": 720})
-                
-                await page.goto(url, wait_until="commit", timeout=60000) # Longer timeout
-                await page.wait_for_timeout(5000) # Additional wait
-                
+                await page.goto(url, wait_until="commit", timeout=60000)
+                await page.wait_for_timeout(5000)
                 screenshot_bytes = await page.screenshot(full_page=True)
                 await context.close()
                 await browser.close()
-                
                 print("Fallback Firefox method (minimal prefs) succeeded.")
-                return screenshot_bytes
+                # Return screenshot with empty DOM data to maintain type consistency
+                return {"screenshot": screenshot_bytes, "links": [], "forms": []}
                 
         except Exception as e_firefox_fallback:
             print(f"Firefox fallback method also failed: {e_firefox_fallback}")
@@ -347,23 +315,18 @@ async def take_screenshot_with_fallback(url: str) -> bytes:
                         browser = await p.firefox.launch(
                             headless=True,
                             firefox_user_prefs={
-                                "browser.safebrowsing.enabled": False,
-                                "browser.safebrowsing.malware.enabled": False,
-                                "browser.safebrowsing.phishing.enabled": False,
-                                "dom.security.https_only_mode": False,
+                                "browser.safebrowsing.enabled": False, "browser.safebrowsing.malware.enabled": False,
+                                "browser.safebrowsing.phishing.enabled": False, "dom.security.https_only_mode": False,
                             }
                         )
-                        
                         page = await browser.new_page()
                         await page.set_viewport_size({"width": 1280, "height": 720})
                         await page.goto(http_url, timeout=45000)
                         await page.wait_for_timeout(3000)
-                        
                         screenshot_bytes = await page.screenshot(full_page=True)
                         await browser.close()
-                        
                         print("HTTP fallback method succeeded.")
-                        return screenshot_bytes
+                        return {"screenshot": screenshot_bytes, "links": [], "forms": []}
                         
                 except Exception as e_http_fallback:
                     print(f"HTTP fallback also failed: {e_http_fallback}")
@@ -375,67 +338,35 @@ async def take_screenshot_with_fallback(url: str) -> bytes:
                     browser = await p.chromium.launch(
                         headless=True,
                         args=[
-                            '--disable-web-security',
-                            '--disable-features=VizDisplayCompositor',
-                            '--disable-extensions',
-                            '--no-sandbox',
-                            '--disable-setuid-sandbox',
-                            '--disable-dev-shm-usage',
-                            '--disable-gpu',
-                            '--ignore-certificate-errors',
-                            '--ignore-ssl-errors',
-                            '--ignore-certificate-errors-spki-list',
-                            '--allow-running-insecure-content',
-                            '--disable-client-side-phishing-detection', # Keep for completeness, though noted as ineffective
-                            '--disable-component-update',
-                            '--disable-default-apps',
-                            '--disable-domain-reliability',
-                            '--disable-features=AudioServiceOutOfProcess',
-                            '--disable-hang-monitor',
-                            '--disable-ipc-flooding-protection',
-                            '--disable-popup-blocking',
-                            '--disable-prompt-on-repost',
-                            '--disable-renderer-backgrounding',
-                            '--disable-sync',
-                            '--force-color-profile=srgb',
-                            '--metrics-recording-only',
-                            '--no-crash-upload',
-                            '--no-default-browser-check',
-                            '--no-first-run',
-                            '--no-pings',
-                            '--password-store=basic',
-                            '--use-mock-keychain',
-                            '--disable-background-networking',
-                            '--disable-background-timer-throttling',
-                            '--disable-backgrounding-occluded-windows',
-                            '--disable-breakpad',
-                            '--disable-component-extensions-with-background-pages',
-                            '--disable-features=TranslateUI',
-                            '--disable-field-trial-config',
-                            '--disable-back-forward-cache'
+                            '--disable-web-security', '--disable-features=VizDisplayCompositor', '--disable-extensions',
+                            '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                            '--ignore-certificate-errors', '--ignore-ssl-errors', '--ignore-certificate-errors-spki-list',
+                            '--allow-running-insecure-content', '--disable-client-side-phishing-detection',
+                            '--disable-component-update', '--disable-default-apps', '--disable-domain-reliability',
+                            '--disable-features=AudioServiceOutOfProcess', '--disable-hang-monitor',
+                            '--disable-ipc-flooding-protection', '--disable-popup-blocking', '--disable-prompt-on-repost',
+                            '--disable-renderer-backgrounding', '--disable-sync', '--force-color-profile=srgb',
+                            '--metrics-recording-only', '--no-crash-upload', '--no-default-browser-check',
+                            '--no-first-run', '--no-pings', '--password-store=basic', '--use-mock-keychain',
+                            '--disable-background-networking', '--disable-background-timer-throttling',
+                            '--disable-backgrounding-occluded-windows', '--disable-breakpad',
+                            '--disable-component-extensions-with-background-pages', '--disable-features=TranslateUI',
+                            '--disable-field-trial-config', '--disable-back-forward-cache'
                         ]
                     )
-                    
-                    context = await browser.new_context(
-                        ignore_https_errors=True,
-                        bypass_csp=True
-                    )
-                    
+                    context = await browser.new_context(ignore_https_errors=True, bypass_csp=True)
                     page = await context.new_page()
                     await page.set_viewport_size({"width": 1280, "height": 720})
                     await page.goto(url, wait_until="commit", timeout=45000)
                     await page.wait_for_timeout(3000)
-                    
                     screenshot_bytes = await page.screenshot(full_page=True)
                     await context.close()
                     await browser.close()
-                    
                     print("Chromium fallback method succeeded.")
-                    return screenshot_bytes
+                    return {"screenshot": screenshot_bytes, "links": [], "forms": []}
                     
             except Exception as e_chromium_fallback:
                 print(f"Chromium fallback also failed: {e_chromium_fallback}")
-                # Re-raise the most informative error encountered
                 raise Exception(f"All screenshot methods failed for {url}. "
                                 f"Primary Firefox error: {e_firefox_primary}. "
                                 f"Fallback Firefox error: {e_firefox_fallback}. "
@@ -487,7 +418,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Overly dramatic or emotional language
 
         4. Interactive Elements
-        Describe and evaluate forms, buttons, and links:
+        Describe and evaluate forms, buttons, and links. **Use the extracted links and form data from the Technical DOM Analysis to verify where these elements actually lead.**
         - What information do they solicit?
         - Do they appear authentic and professionally designed?
         - Are they requesting payment information or login credentials?
@@ -522,7 +453,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - False testimonials or reviews
 
         8. URL Analysis
-        Examine the URL for suspicious patterns:
+        Examine the URL for suspicious patterns. **Correlate this with the domains found in the extracted links and forms from the Technical DOM Analysis.**
         - Domain name inconsistencies or typo-squatting
         - Brand impersonation attempts
         - Suspicious subdomains or TLD abuse
@@ -552,21 +483,25 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Provide specific actionable advice when possible
         """
 
-        print("Starting Firefox-based phishing detection process...")
+        print("Starting enhanced phishing detection process...")
         print(f"Target URL: {target_url}")
         print("-" * 60)
 
-        # Step 1: Take screenshot
-        print("Step 1: Taking screenshot...")
-        screenshot_data = await take_screenshot_with_fallback(target_url)
-        print(f"Screenshot captured successfully. Size: {len(screenshot_data)} bytes")
+        # Step 1: Take screenshot and extract DOM data
+        print("Step 1: Capturing screenshot and DOM data...")
+        analysis_data = await take_screenshot_with_fallback(target_url)
+        screenshot_bytes = analysis_data["screenshot"]
+        print(f"Screenshot captured successfully. Size: {len(screenshot_bytes)} bytes")
+        if analysis_data["links"] or analysis_data["forms"]:
+            print(f"DOM data extracted: {len(analysis_data['links'])} links, {len(analysis_data['forms'])} forms.")
 
         # Step 2: Send to Gemini for analysis
         print("\nStep 2: Analyzing with Gemini...")
         ai_identification = await asyncio.to_thread(
-            identify_image_with_gemini_from_bytes,
-            screenshot_data,
+            identify_with_gemini,
+            screenshot_bytes,
             target_url,
+            analysis_data, # Pass the whole dictionary
             identification_prompt_base
         )
 
