@@ -4,7 +4,9 @@
 
 A sophisticated, high-performance Telegram bot that scans URLs and domains found in messages to protect users from malicious links.
 
-It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**. **Gemini 2.5 Flash** is used to analyse the website via Playwright. 
+It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**.
+
+ **Gemini 2.5 Flash** is used to analyse the website via Playwright. 
 
 The bot is designed to ~~handle multiple requests efficiently~~ and can be extended with additional security checkers in the future.
 
@@ -19,11 +21,11 @@ The bot is designed to ~~handle multiple requests efficiently~~ and can be exten
 -   **Degrades Gracefully:** Should you not have any of the services (eg, Web Risk), the code doesn't crash and continues to run should a component be missing. 
 
 ### Features to build
-[x] DOM inspection with AIthu
-[x] HTML inspection with AI
-[] (curated) Attributions if using GTI key (with relevant license)
-[] More security checkers (eg, URLscan, Shodan, alienvault, etc)
-[] More concrete logic checks
+- [x] DOM inspection with AI
+- [x] HTML inspection with AI
+- [] (curated) Attributions if using GTI key (with relevant license)
+- [] More security checkers (eg, URLscan, Shodan, alienvault, etc)
+- [] More concrete logic checks
 
 ## Setup
 
