@@ -4,7 +4,7 @@
 
 A sophisticated, high-performance Telegram bot that scans URLs and domains found in messages to protect users from malicious links.
 
-It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**, and **Gemini 2.5 Flash**. The bot is designed to handle multiple requests efficiently and can be extended with additional security checkers in the future.
+It provides a clear, standardized response format by assessing links against multiple threat intelligence sources, including **Google Threat Intelligence (Google Threat Intelligence verdicts + Vendor Scores)**, **Google Web Risk**, and **Gemini 2.5 Flash**. The bot is designed to ~~handle multiple requests efficiently~~ and can be extended with additional security checkers in the future.
 
 ## Key Features
 
