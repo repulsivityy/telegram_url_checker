@@ -6,7 +6,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 1.4.4
+# Version: 1.5
 #############
 
 import base64
@@ -20,12 +20,12 @@ API_KEY = os.environ.get("GEMINI_APIKEY")
 GEMINI_MODEL = "gemini-2.5-flash-preview-05-20" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
-async def take_screenshot_firefox_enhanced(url: str) -> bytes:
+async def take_screenshot_firefox_enhanced(url: str) -> dict:
     """
-    Takes a full-page screenshot using Firefox with enhanced Safe Browsing bypass.
+    Takes a full-page screenshot, extracts DOM information (links, forms), and returns them.
     Includes warning page detection and bypass attempts.
     """
-    print(f"Taking screenshot with Firefox (enhanced): {url}")  
+    print(f"Analyzing and taking screenshot with Firefox (enhanced): {url}")
     try:
         async with async_playwright() as p:
             browser = await p.firefox.launch(
@@ -101,13 +101,12 @@ async def take_screenshot_firefox_enhanced(url: str) -> bytes:
                 ignore_https_errors=True,
                 bypass_csp=True,
                 accept_downloads=False,
-                java_script_enabled=True,  # Keep JS enabled to handle any dynamic content
+                java_script_enabled=True,
                 viewport={"width": 1280, "height": 720}
             )
             
             page = await context.new_page()
             
-            # Set additional headers to look more like a regular browser
             await page.set_extra_http_headers({
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
@@ -117,48 +116,32 @@ async def take_screenshot_firefox_enhanced(url: str) -> bytes:
                 'Upgrade-Insecure-Requests': '1'
             })
             
-            # Navigate to the URL
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as nav_error:
                 print(f"Navigation error: {nav_error}")
-                # Try with a simpler wait condition
                 await page.goto(url, wait_until="commit", timeout=30000)
             
-            # Wait for page to load
             await page.wait_for_timeout(3000)
             
-            # Check for Firefox-specific warning pages and bypass them
             try:
                 page_content = (await page.content()).lower()
                 page_text = (await page.text_content('body')).lower() if await page.locator('body').count() > 0 else ""
-
                 
-                # Firefox warning indicators
                 firefox_warnings = [
-                    'deceptive site ahead',
-                    'reported attack page',
-                    'this connection is not secure',
-                    'warning: potential security risk ahead',
-                    'mozilla firefox has blocked this page',
+                    'deceptive site ahead', 'reported attack page', 'this connection is not secure',
+                    'warning: potential security risk ahead', 'mozilla firefox has blocked this page',
                     'this site has been reported as unsafe'
                 ]
                 
                 if any(warning in page_text or warning in page_content for warning in firefox_warnings):
                     print("Firefox security warning detected, attempting bypass...")
-                    
-                    # Try to find and click bypass buttons
                     bypass_selectors = [
-                        'button:has-text("Advanced")',
-                        'button[id*="advancedButton"]',
-                        'button[id*="exceptionDialogButton"]',
-                        'button:has-text("Accept the Risk and Continue")',
-                        'button:has-text("Continue to site")',
-                        'a:has-text("Continue")',
-                        'a[id*="proceed"]',
-                        'button[id*="proceed"]'
+                        'button:has-text("Advanced")', 'button[id*="advancedButton"]',
+                        'button[id*="exceptionDialogButton"]', 'button:has-text("Accept the Risk and Continue")',
+                        'button:has-text("Continue to site")', 'a:has-text("Continue")',
+                        'a[id*="proceed"]', 'button[id*="proceed"]'
                     ]
-                    
                     for selector in bypass_selectors:
                         try:
                             element = await page.wait_for_selector(selector, timeout=2000)
@@ -169,71 +152,145 @@ async def take_screenshot_firefox_enhanced(url: str) -> bytes:
                                 break
                         except:
                             continue
-                    
-                    # Additional wait after bypass attempt
                     await page.wait_for_timeout(3000)
-                
             except Exception as warning_error:
                 print(f"Warning bypass error (continuing): {warning_error}")
+
+            # --- Start of new data extraction ---
+            print("Extracting DOM information...")
             
-            # Take the screenshot (PNG doesn't support quality parameter)
-            screenshot_bytes = await page.screenshot(
-                full_page=True,
-                type='png'
-            )
+            # Extract all links
+            links = await page.eval_on_selector_all('a', 'elements => elements.map(el => el.href)')
+            
+            # Extract all form actions
+            forms = await page.eval_on_selector_all('form', 'elements => elements.map(el => el.action)')
+            
+            # Get full page HTML
+            html_content = await page.content()
+            
+            print(f"Found {len(links)} links, {len(forms)} forms, and extracted HTML.")
+            # --- End of new data extraction ---
+
+            screenshot_bytes = await page.screenshot(full_page=True, type='png')
             print("Screenshot taken successfully with Firefox.")
             
             await context.close()
             await browser.close()
             
-            return screenshot_bytes
+            return {
+                "screenshot": screenshot_bytes,
+                "links": links,
+                "forms": forms,
+                "html": html_content,
+            }
             
     except Exception as e:
-        print(f"Firefox screenshot failed: {e}")
+        print(f"Firefox analysis failed: {e}")
         raise
 
-def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, prompt_text: str) -> str:
+def _clean_html_for_analysis(html_content: str, max_length: int = 8000) -> str:
     """
-    Sends image bytes and the target URL to the Gemini API for identification/description.
+    Clean and truncate HTML content for AI analysis.
+    Removes excessive whitespace and limits length to stay within token limits.
     """
-    print(f"Sending image (bytes) and URL '{webpage_url}' to Gemini API")
+    if not html_content:
+        return "HTML not available."
+    
+    import re
+    
+    # Remove script and style content (they're usually not relevant for phishing detection)
+    html_content = re.sub(r'<script.*?</script>', '[SCRIPT REMOVED]', html_content, flags=re.DOTALL | re.IGNORECASE)
+    html_content = re.sub(r'<style.*?</style>', '[STYLE REMOVED]', html_content, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove excessive whitespace
+    html_content = re.sub(r'\s+', ' ', html_content)
+    html_content = html_content.strip()
+    
+    # Truncate if too long, but try to keep complete tags
+    if len(html_content) > max_length:
+        html_content = html_content[:max_length]
+        # Try to end at a complete tag
+        last_tag_end = html_content.rfind('>')
+        if last_tag_end > max_length * 0.8:  # Only truncate if we're not losing too much
+            html_content = html_content[:last_tag_end + 1]
+        html_content += "\n[... HTML truncated for analysis ...]"
+    
+    return html_content
+
+def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, prompt_text: str) -> str:
+    """
+    Sends image bytes, DOM data, and URL to the Gemini API for analysis.
+    """
+    print(f"Sending image, DOM data, and HTML content to Gemini API for '{webpage_url}'")
     try:
-        # Encode the image bytes to base64
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        headers = {'Content-Type': 'application/json'}
 
-        headers = {
-            'Content-Type': 'application/json',
-        }
+        # ENHANCED: Create comprehensive technical analysis section
+        links = dom_data.get('links', [])
+        forms = dom_data.get('forms', [])
+        html_content = dom_data.get('html', '')
+        
+        # Clean HTML for better analysis (remove excessive whitespace, limit length)
+        cleaned_html = _clean_html_for_analysis(html_content)
 
-        # Combine the base prompt text with the URL for the AI to analyze
-        full_prompt_for_ai = f"{prompt_text}\n\nAdditionally, consider the URL of this website: {webpage_url}. Does this URL itself (e.g., domain name, subdomains) suggest typo-squatting, brand impersonation, TLD abuse, or any other attempt to masquerade as a legitimate site? Provide analysis on both the visual content and the URL."
+        # Create enhanced technical summary
+        technical_summary = (
+            f"\n\n## ENHANCED TECHNICAL ANALYSIS\n"
+            f"**CRITICAL INSTRUCTION**: The following technical data extracted from the webpage's source code may reveal deception not visible in the screenshot. A phishing site might DISPLAY legitimate branding but have malicious underlying code.\n\n"
+            f"### 1. Links Analysis ({len(links)} found)\n"
+            f"**All Link Destinations**: {json.dumps(links[:25])}\n"  # Limit to first 25 links
+            f"{f'[... and {len(links)-25} more links]' if len(links) > 25 else ''}\n\n"
+            f"### 2. Form Actions Analysis ({len(forms)} found)\n"
+            f"**Form Submission Targets**: {json.dumps(forms)}\n\n"
+            f"### 3. HTML Source Code Analysis\n"
+            f"**Page HTML Structure** (cleaned for analysis):\n"
+            f"```html\n{cleaned_html}\n```\n\n"
+            f"### 4. Cross-Reference Analysis Required\n"
+            f"**CRITICAL CHECKS**:\n"
+            f"- Do the extracted links match what's visually presented in the screenshot?\n"
+            f"- Are there hidden forms or links not visible in the screenshot?\n"
+            f"- Does the HTML title/metadata match the visual branding?\n"
+            f"- Are there any suspicious redirects or iframe content?\n"
+            f"- Do legitimate-looking buttons actually link to malicious domains?\n"
+            f"- Are there any obfuscated or suspicious JavaScript elements?\n"
+            f"- Is the site impersonating another domain through HTML content?\n\n"
+            f"### 5. Domain Verification\n"
+            f"**Current URL**: {webpage_url}\n"
+            f"**Check for**:\n"
+            f"- HTML references to different domains than the current URL\n"
+            f"- Mixed content (HTTPS site loading HTTP resources)\n"
+            f"- Suspicious external resources or CDN usage\n"
+            f"- Domain spoofing in HTML content vs actual URL\n\n"
+            f"### Analysis Instructions:\n"
+            f"1. **Visual vs Technical Mismatch**: Look for discrepancies between what the screenshot shows and what the HTML/links reveal\n"
+            f"2. **Hidden Elements**: Identify any suspicious elements in HTML that aren't visible in screenshot\n"
+            f"3. **Link Destination Analysis**: Verify if visible buttons/links actually go where they claim\n"
+            f"4. **Content Authenticity**: Check if HTML source matches the legitimate site it appears to impersonate\n"
+            f"5. **Sophisticated Techniques**: Look for advanced phishing techniques like iframe overlays, legitimate link mixing with malicious forms, etc.\n\n"
+            f"**REMEMBER**: A single legitimate link (like google.com) does NOT make a phishing site legitimate. Focus on the overall context and any deceptive elements."
+        )
+
+        # Combine the base prompt, technical summary, and URL for the AI
+        full_prompt_for_ai = f"{prompt_text}{technical_summary}"
 
         payload = {
             "contents": [
                 {
                     "role": "user",
                     "parts": [
-                        {
-                            "inlineData": {
-                                "mimeType": "image/png",
-                                "data": base64_image
-                            }
-                        },
-                        {
-                            "text": full_prompt_for_ai
-                        }
+                        {"inlineData": {"mimeType": "image/png", "data": base64_image}},
+                        {"text": full_prompt_for_ai},
                     ]
                 }
             ]
         }
 
-        # Make the API request
         response = requests.post(GEMINI_API_URL, headers=headers, data=json.dumps(payload))
         response.raise_for_status()
-
         result = response.json()
 
-        # Extract the text from the response
+        # Extract the text from the response - THIS LOGIC IS PRESERVED FROM THE ORIGINAL
         if result.get("candidates"):
             candidate = result["candidates"][0]
             if candidate.get("content"):
@@ -272,14 +329,13 @@ def identify_image_with_gemini_from_bytes(image_bytes: bytes, webpage_url: str, 
         print(f"An unexpected error occurred: {e}")
         return f"An error occurred: {e}"
 
-async def take_screenshot_with_fallback(url: str) -> bytes:
+async def take_screenshot_with_fallback(url: str) -> dict:
     """
-    Primary function that tries Firefox with fallback options.
+    Primary function that tries Firefox with fallback options, ensuring a consistent return type.
     This function consolidates the screenshot logic, including aggressive bypass attempts.
     """
-    # This structure is simplified to demonstrate modularity.
-    # The aggressive fallback logic (Chromium, HTTP) is integrated directly here
     try:
+        # The primary, enhanced method returns a full data dictionary
         return await take_screenshot_firefox_enhanced(url)
     except Exception as e_firefox_primary:
         print(f"Primary Firefox method failed: {e_firefox_primary}")
@@ -291,49 +347,29 @@ async def take_screenshot_with_fallback(url: str) -> bytes:
                 browser = await p.firefox.launch(
                     headless=True,
                     firefox_user_prefs={
-                        # Disable Safe Browse
-                        "browser.safebrowsing.enabled": False,
-                        "browser.safebrowsing.malware.enabled": False,
-                        "browser.safebrowsing.phishing.enabled": False,
-                        
-                        # Enhanced SSL/Certificate bypass
-                        "security.ssl.require_safe_negotiation": False,
-                        "security.ssl.treat_unsafe_negotiation_as_broken": False,
-                        "security.ssl3.rsa_des_ede3_sha": True,
-                        "security.tls.hello_downgrade_check": False,
-                        "security.warn_entering_secure": False,
-                        "security.warn_entering_weak": False,
-                        "security.warn_leaving_secure": False,
-                        "security.warn_submit_insecure": False,
-                        "security.warn_viewing_mixed": False,
-                        "dom.security.https_only_mode": False,
-                        "security.mixed_content.block_active_content": False,
-                        "security.mixed_content.block_display_content": False,
-                        
-                        # Certificate handling
-                        "security.default_personal_cert": "Ask Every Time",
-                        "security.ssl.errorReporting.enabled": False,
-                        "security.ssl.errorReporting.automatic": False,
-                        
-                        # Additional network settings
-                        "network.stricttransportsecurity.preloadlist": False,
-                        "security.cert_pinning.enforcement_level": 0,
+                        "browser.safebrowsing.enabled": False, "browser.safebrowsing.malware.enabled": False,
+                        "browser.safebrowsing.phishing.enabled": False, "security.ssl.require_safe_negotiation": False,
+                        "security.ssl.treat_unsafe_negotiation_as_broken": False, "security.ssl3.rsa_des_ede3_sha": True,
+                        "security.tls.hello_downgrade_check": False, "security.warn_entering_secure": False,
+                        "security.warn_entering_weak": False, "security.warn_leaving_secure": False,
+                        "security.warn_submit_insecure": False, "security.warn_viewing_mixed": False,
+                        "dom.security.https_only_mode": False, "security.mixed_content.block_active_content": False,
+                        "security.mixed_content.block_display_content": False, "security.default_personal_cert": "Ask Every Time",
+                        "security.ssl.errorReporting.enabled": False, "security.ssl.errorReporting.automatic": False,
+                        "network.stricttransportsecurity.preloadlist": False, "security.cert_pinning.enforcement_level": 0,
                     }
                 )
-                
                 context = await browser.new_context(ignore_https_errors=True)
                 page = await context.new_page()
                 await page.set_viewport_size({"width": 1280, "height": 720})
-                
-                await page.goto(url, wait_until="commit", timeout=60000) # Longer timeout
-                await page.wait_for_timeout(5000) # Additional wait
-                
+                await page.goto(url, wait_until="commit", timeout=60000)
+                await page.wait_for_timeout(5000)
                 screenshot_bytes = await page.screenshot(full_page=True)
                 await context.close()
                 await browser.close()
-                
                 print("Fallback Firefox method (minimal prefs) succeeded.")
-                return screenshot_bytes
+                # Return screenshot with empty DOM data to maintain type consistency
+                return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
                 
         except Exception as e_firefox_fallback:
             print(f"Firefox fallback method also failed: {e_firefox_fallback}")
@@ -347,23 +383,18 @@ async def take_screenshot_with_fallback(url: str) -> bytes:
                         browser = await p.firefox.launch(
                             headless=True,
                             firefox_user_prefs={
-                                "browser.safebrowsing.enabled": False,
-                                "browser.safebrowsing.malware.enabled": False,
-                                "browser.safebrowsing.phishing.enabled": False,
-                                "dom.security.https_only_mode": False,
+                                "browser.safebrowsing.enabled": False, "browser.safebrowsing.malware.enabled": False,
+                                "browser.safebrowsing.phishing.enabled": False, "dom.security.https_only_mode": False,
                             }
                         )
-                        
                         page = await browser.new_page()
                         await page.set_viewport_size({"width": 1280, "height": 720})
                         await page.goto(http_url, timeout=45000)
                         await page.wait_for_timeout(3000)
-                        
                         screenshot_bytes = await page.screenshot(full_page=True)
                         await browser.close()
-                        
                         print("HTTP fallback method succeeded.")
-                        return screenshot_bytes
+                        return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
                         
                 except Exception as e_http_fallback:
                     print(f"HTTP fallback also failed: {e_http_fallback}")
@@ -375,67 +406,35 @@ async def take_screenshot_with_fallback(url: str) -> bytes:
                     browser = await p.chromium.launch(
                         headless=True,
                         args=[
-                            '--disable-web-security',
-                            '--disable-features=VizDisplayCompositor',
-                            '--disable-extensions',
-                            '--no-sandbox',
-                            '--disable-setuid-sandbox',
-                            '--disable-dev-shm-usage',
-                            '--disable-gpu',
-                            '--ignore-certificate-errors',
-                            '--ignore-ssl-errors',
-                            '--ignore-certificate-errors-spki-list',
-                            '--allow-running-insecure-content',
-                            '--disable-client-side-phishing-detection', # Keep for completeness, though noted as ineffective
-                            '--disable-component-update',
-                            '--disable-default-apps',
-                            '--disable-domain-reliability',
-                            '--disable-features=AudioServiceOutOfProcess',
-                            '--disable-hang-monitor',
-                            '--disable-ipc-flooding-protection',
-                            '--disable-popup-blocking',
-                            '--disable-prompt-on-repost',
-                            '--disable-renderer-backgrounding',
-                            '--disable-sync',
-                            '--force-color-profile=srgb',
-                            '--metrics-recording-only',
-                            '--no-crash-upload',
-                            '--no-default-browser-check',
-                            '--no-first-run',
-                            '--no-pings',
-                            '--password-store=basic',
-                            '--use-mock-keychain',
-                            '--disable-background-networking',
-                            '--disable-background-timer-throttling',
-                            '--disable-backgrounding-occluded-windows',
-                            '--disable-breakpad',
-                            '--disable-component-extensions-with-background-pages',
-                            '--disable-features=TranslateUI',
-                            '--disable-field-trial-config',
-                            '--disable-back-forward-cache'
+                            '--disable-web-security', '--disable-features=VizDisplayCompositor', '--disable-extensions',
+                            '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                            '--ignore-certificate-errors', '--ignore-ssl-errors', '--ignore-certificate-errors-spki-list',
+                            '--allow-running-insecure-content', '--disable-client-side-phishing-detection',
+                            '--disable-component-update', '--disable-default-apps', '--disable-domain-reliability',
+                            '--disable-features=AudioServiceOutOfProcess', '--disable-hang-monitor',
+                            '--disable-ipc-flooding-protection', '--disable-popup-blocking', '--disable-prompt-on-repost',
+                            '--disable-renderer-backgrounding', '--disable-sync', '--force-color-profile=srgb',
+                            '--metrics-recording-only', '--no-crash-upload', '--no-default-browser-check',
+                            '--no-first-run', '--no-pings', '--password-store=basic', '--use-mock-keychain',
+                            '--disable-background-networking', '--disable-background-timer-throttling',
+                            '--disable-backgrounding-occluded-windows', '--disable-breakpad',
+                            '--disable-component-extensions-with-background-pages', '--disable-features=TranslateUI',
+                            '--disable-field-trial-config', '--disable-back-forward-cache'
                         ]
                     )
-                    
-                    context = await browser.new_context(
-                        ignore_https_errors=True,
-                        bypass_csp=True
-                    )
-                    
+                    context = await browser.new_context(ignore_https_errors=True, bypass_csp=True)
                     page = await context.new_page()
                     await page.set_viewport_size({"width": 1280, "height": 720})
                     await page.goto(url, wait_until="commit", timeout=45000)
                     await page.wait_for_timeout(3000)
-                    
                     screenshot_bytes = await page.screenshot(full_page=True)
                     await context.close()
                     await browser.close()
-                    
                     print("Chromium fallback method succeeded.")
-                    return screenshot_bytes
+                    return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
                     
             except Exception as e_chromium_fallback:
                 print(f"Chromium fallback also failed: {e_chromium_fallback}")
-                # Re-raise the most informative error encountered
                 raise Exception(f"All screenshot methods failed for {url}. "
                                 f"Primary Firefox error: {e_firefox_primary}. "
                                 f"Fallback Firefox error: {e_firefox_fallback}. "
@@ -455,22 +454,33 @@ async def analyze_url_for_phishing(target_url: str) -> str:
     AI_ANALYSIS_TIMEOUT = 120 
     
     async def analysis_logic():
-        # Comprehensive phishing detection prompt
+        # ENHANCED Comprehensive phishing detection prompt
         identification_prompt_base = """
-        You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and URL examination. Analyze each webpage screenshot for visual or textual indicators of potential phishing or scam websites.
-    
+        You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and comprehensive technical analysis of the underlying HTML/DOM structure.
+
+        ## CRITICAL ANALYSIS APPROACH
+        **IMPORTANT**: Phishing sites often display legitimate-looking content while having malicious underlying code. A site showing legitimate branding with some legitimate links may still be a phishing site if it's impersonating a brand or collecting credentials fraudulently.
+
         ## Analysis Framework
         Evaluate the following elements systematically:
 
-        1. Branding Consistency
+        1. **Visual vs Technical Cross-Reference** (MOST IMPORTANT)
+        Are there discrepancies between what the screenshot shows and what the technical analysis reveals?
+        - Does the visual branding match the actual domain and HTML content?
+        - Do visible buttons and links actually go where they appear to lead?
+        - Are there hidden forms or elements not visible in the screenshot?
+        - Is the site legitimately from the domain it claims to represent?
+        - Does the URL match the branding displayed on the page?
+
+        2. **Branding Consistency**
         Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
         - Misspellings in brand names or logos
-        - Poor translations or awkward language
+        - Poor translations or awkward language  
         - Low-quality, pixelated, or distorted graphics
         - Subtle inconsistencies in colors, fonts, or design elements
         - Incorrect or outdated brand styling
 
-        2. Design Quality
+        3. **Design Quality**
         Assess the overall professionalism of the design:
         - Professional layout vs. hastily assembled appearance
         - Consistent alignment and spacing
@@ -478,7 +488,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Image quality and resolution
         - Overall visual coherence and attention to detail
 
-        3. Textual Content
+        4. **Textual Content**
         Examine all visible text for red flags:
         - Grammatical errors, spelling mistakes, or unusual phrasing
         - Urgent or threatening language ("Act now!" "Account will be suspended!")
@@ -486,34 +496,33 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Generic greetings instead of personalized content
         - Overly dramatic or emotional language
 
-        4. Interactive Elements
-        Describe and evaluate forms, buttons, and links:
-        - What information do they solicit?
-        - Do they appear authentic and professionally designed?
-        - Are they requesting payment information or login credentials?
-        - Are there suspicious payment or credit card collection forms?
+        5. **Interactive Elements & Technical Verification**
+        Cross-reference visible elements with the extracted technical data:
+        - What information do forms actually collect vs. what they claim?
+        - Where do links and buttons actually lead vs. where they appear to go?
+        - Are there suspicious payment or credential collection forms?
         - Do button labels and form fields match legitimate site standards?
-        - Are there any hidden or misleading links (e.g., "Click here for more info")?
+        - Are there any hidden or misleading elements in the HTML?
         - Are there any pop-ups or overlays that obscure content?
         - Are there any suspicious download links or buttons?
         - Are there any social media links that appear fake or lead to suspicious profiles?
 
-        5. Sense of Urgency/Threats/Unrealistic Offers
-        Identify manipulation tactics: 
+        6. **Sense of Urgency/Threats/Unrealistic Offers**
+        Identify manipulation tactics:
         - Undue urgency ("Limited time offer!" "Expires today!")
         - Threats (account suspension, legal action, security breaches)
         - Offers that seem too good to be true
         - Fake countdown timers or limited availability claims
         - Pressure tactics to act immediately
 
-        6. Content Specificity
+        7. **Content Specificity**
         Evaluate the relevance and authenticity of content:
         - Is content generic or highly specific to a legitimate service?
         - Does it reference real transactions, accounts, or services?
         - Are there specific details that would only be known by legitimate companies?
         - Is the content contextually appropriate for the claimed service?
 
-        7. Security Indicators
+        8. **Security Indicators**
         Look for fraudulent security elements:
         - Fake security badges or certificates
         - Misleading trust indicators
@@ -521,57 +530,83 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         - Suspicious SSL indicators or warnings
         - False testimonials or reviews
 
-        8. URL Analysis
-        Examine the URL for suspicious patterns:
-        - Domain name inconsistencies or typo-squatting
+        9. **URL vs Content Analysis**
+        Examine the relationship between the URL and content:
+        - Does the domain match the branding and content shown?
+        - Are there domain spoofing attempts or typosquatting?
         - Brand impersonation attempts
         - Suspicious subdomains or TLD abuse
         - Character substitution (0 for O, 1 for l, etc.)
         - Overly long or complex domain structures
-        - Legitimate brand names used as subdomains of suspicious domains
-        - Homograph / unicode phishing attempts 
+        - Homograph / unicode phishing attempts
+
+        10. **HTML Source Code Analysis**
+        Examine the full HTML source code provided in the Technical Analysis section. Look for:
+        - Suspicious JavaScript or obfuscated code that could redirect users or steal data
+        - Hidden iframes or elements designed to load malicious content
+        - Unusual comments or non-standard HTML structure that might hide malicious intent
+        - Embedded scripts from untrusted or unknown third-party domains
+        - Form actions that redirect to suspicious domains
+        - Any other anomalies that suggest deceptive practices
+        - Discrepancies between what's visible and what's in the code
+
+        11. **Advanced Deception Detection**
+        Look for sophisticated phishing techniques:
+        - Legitimate links mixed with malicious forms to build credibility
+        - Iframe overlays hiding malicious content
+        - Partial legitimate functionality to build trust
+        - Progressive credential harvesting techniques
+        - Social engineering through legitimate-appearing elements
 
         ## Response Requirements
 
-        ### Detailed Analysis 
-        Provide a comprehensive evaluation addressing each of the 8 points above. Be specific about what you observe and why it's concerning or legitimate.
+        ### Detailed Analysis
+        Provide a comprehensive evaluation addressing each point above. **Pay special attention to any discrepancies between visual appearance and technical reality.**
+
+        ### CRITICAL: Do not be misled by isolated legitimate elements
+        A phishing site may include some legitimate links or references to build credibility while still being malicious overall. Focus on the overall authenticity and whether the site is legitimately representing the brand it appears to show.
 
         ## Risk Assessment Format
         ### Conclude with exactly this format:
         RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
 
         ### Risk Level Guidelines
-        - Low Risk: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure
-        - Medium Risk: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing
-        - High Risk: Multiple clear indicators of phishing/scam; obvious attempts at deception or brand impersonation
+        - **Low Risk**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
+        - **Medium Risk**: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing requiring further verification
+        - **High Risk**: Clear indicators of phishing/scam; obvious attempts at deception, brand impersonation, or technical elements that contradict visual presentation
 
         ## Additional Considerations
         - If uncertain, err on the side of caution and recommend verification through official channels
         - Note any sophisticated techniques that might fool casual observers
         - Mention if the site requires additional verification beyond visual analysis
         - Provide specific actionable advice when possible
+        - **Remember**: The presence of some legitimate links does not automatically make a site legitimate
         """
 
-        print("Starting Firefox-based phishing detection process...")
+        print("Starting enhanced phishing detection process...")
         print(f"Target URL: {target_url}")
         print("-" * 60)
 
-        # Step 1: Take screenshot
-        print("Step 1: Taking screenshot...")
-        screenshot_data = await take_screenshot_with_fallback(target_url)
-        print(f"Screenshot captured successfully. Size: {len(screenshot_data)} bytes")
+        # Step 1: Take screenshot and extract DOM data
+        print("Step 1: Capturing screenshot and DOM data...")
+        analysis_data = await take_screenshot_with_fallback(target_url)
+        screenshot_bytes = analysis_data["screenshot"]
+        print(f"Screenshot captured successfully. Size: {len(screenshot_bytes)} bytes")
+        if analysis_data["links"] or analysis_data["forms"]:
+            print(f"DOM data extracted: {len(analysis_data['links'])} links, {len(analysis_data['forms'])} forms.")
 
         # Step 2: Send to Gemini for analysis
         print("\nStep 2: Analyzing with Gemini...")
         ai_identification = await asyncio.to_thread(
-            identify_image_with_gemini_from_bytes,
-            screenshot_data,
+            identify_with_gemini,
+            screenshot_bytes,
             target_url,
+            analysis_data, # Pass the whole dictionary
             identification_prompt_base
         )
 
         print("\n" + "="*60)
-        print("PHISHING DETECTION ANALYSIS RESULTS")
+        print("ENHANCED PHISHING DETECTION ANALYSIS RESULTS")
         print("="*60)
         print(f"URL: {target_url}")
         print("-" * 60)
@@ -595,7 +630,6 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         print(f"\nProcess failed with error: {e}")
         # Return a standardized error message
         return "[ERROR] AI analysis failed due to an error."
-
 
 # --- Main Execution (only runs when script is executed directly) ---
 if __name__ == "__main__":
