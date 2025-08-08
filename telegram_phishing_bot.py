@@ -51,7 +51,7 @@ ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID")  # Your Telegram user ID for adm
 #####################
 # Constants / Variables. Adjust these as needed.
 #####################
-MALICIOUS_THRESHOLD = 4
+MALICIOUS_THRESHOLD = 5
 API_TIMEOUT = 10
 TOTAL_TIMEOUT = 25
 IDLE_SHUTDOWN_SECONDS = 600
@@ -60,7 +60,6 @@ VT_POLLING_SCHEDULE = [90, 60, 60, 60, 30, 30, 30]  # Decreasing delays
 VT_POLLING_DEFAULT_INTERVAL = 30  # Continue with 30s after schedule exhausted
 TOTAL_POLLING_TIMEOUT = 360  # 6 minutes total timeout
 
-# ✅ NEW: Global debug flag
 DEBUG_MODE = False
 
 @dataclass

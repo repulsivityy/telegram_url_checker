@@ -212,6 +212,7 @@ The bot uses a "safety-first" model to classify links:
     -   Its Google TI score is > 60.
     -   Its Google Web Risk confidence is `HIGH` or `EXTREMELY_HIGH`.
     -   Its VirusTotal vendor count meets the `MALICIOUS_THRESHOLD`.
+        - The `MALICIOUS_THRESHOLD` is configured in the `telegram_phishing_bot.py` code. Default threshold is `5`
     -   Its Gemini AI Analysis meets `HIGH`
 
 2.  **Known Good (SAFE):** If not dangerous, a link is only flagged as `SAFE` if:
