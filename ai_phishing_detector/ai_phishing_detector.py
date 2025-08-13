@@ -2,11 +2,12 @@
 # Phishing Detection Tool with AI to identify potential phishing or scam websites
 # This script captures screenshots of suspicious URLs and analyzes them using Google's Gemini AI to detect phishing attempts and scam indicators.
 # Enhanced with dual browser support (Firefox + Chromium) and user agent testing for evasion detection.
+# Now includes smart hybrid analysis that uses dual AI when differences are detected.
 # Check README.md for more details.
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 2.0 - Enhanced with dual browser support
+# Version: 2.1 - Enhanced with dual browser support and smart hybrid analysis
 #############
 
 import base64
@@ -146,7 +147,7 @@ async def launch_browser_for_research(p, browser_type: str):
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--disable-blink-features=AutomationControlled',
-            '--exclude-switches=enable-automation'
+            '--exclude-switches=enable-automation',
 
              # Privacy settings that might help bypass detection
             '--disable-features=PrivacySandboxSettings4',
@@ -399,6 +400,390 @@ async def analyze_with_dual_browsers(url: str, test_user_agents: list = None) ->
     
     return results
 
+# Smart Hybrid Analysis Functions
+
+def calculate_score(result: dict) -> int:
+    """
+    Calculates the content richness score for a result.
+    """
+    return (
+        len(result.get("html", "")) + 
+        len(result.get("links", [])) * 100 + 
+        len(result.get("forms", [])) * 200
+    )
+
+def get_top_2_results(browser_results: dict) -> list:
+    """
+    Gets the top 2 results by score.
+    Returns list of (ua_key, result_data) tuples.
+    """
+    successful_results = {k: v for k, v in browser_results.items() if "error" not in v}
+    
+    if len(successful_results) < 2:
+        return [(k, v) for k, v in successful_results.items()][:1]  # Return top 1 if only 1 success
+    
+    # Score and sort results
+    scored_results = []
+    for ua_key, result in successful_results.items():
+        score = calculate_score(result)
+        scored_results.append((ua_key, result, score))
+    
+    # Sort by score (highest first) and return top 2
+    scored_results.sort(key=lambda x: x[2], reverse=True)
+    return [(ua_key, result) for ua_key, result, score in scored_results[:2]]
+
+def should_use_dual_analysis(browser_results: dict) -> tuple:
+    """
+    Determines if dual analysis is worth the extra cost.
+    Returns (should_use_dual: bool, reason: str).
+    """
+    top_2 = get_top_2_results(browser_results)
+    
+    if len(top_2) < 2:
+        return False, "Only one successful result available"
+    
+    result1_ua, result1_data = top_2[0]
+    result2_ua, result2_data = top_2[1]
+    
+    # Check for significant differences
+    reasons = []
+    
+    # 1. Different final URLs (redirects)
+    url1 = result1_data.get("final_url", "").strip()
+    url2 = result2_data.get("final_url", "").strip()
+    if url1 != url2:
+        reasons.append(f"Different final URLs: {url1} vs {url2}")
+    
+    # 2. Different page titles
+    title1 = result1_data.get("title", "").strip()
+    title2 = result2_data.get("title", "").strip()
+    if title1 != title2:
+        reasons.append(f"Different page titles: '{title1[:30]}...' vs '{title2[:30]}...'")
+    
+    # 3. Significant difference in content richness
+    score1 = calculate_score(result1_data)
+    score2 = calculate_score(result2_data)
+    if score1 > 0:  # Avoid division by zero
+        score_diff_percent = abs(score1 - score2) / score1
+        if score_diff_percent > 0.25: 
+            reasons.append(f"Significant content difference: {score1} vs {score2} ({score_diff_percent:.1%} gap)")
+    
+    # 4. Different browser engines
+    browser1 = result1_data.get("browser_type")
+    browser2 = result2_data.get("browser_type")
+    if browser1 != browser2:
+        reasons.append(f"Different browser engines: {browser1} vs {browser2}")
+    
+    # 5. Significant difference in link/form counts 
+    links_diff = abs(len(result1_data.get("links", [])) - len(result2_data.get("links", [])))
+    forms_diff = abs(len(result1_data.get("forms", [])) - len(result2_data.get("forms", [])))
+    if links_diff > 4 or forms_diff > 1: 
+        reasons.append(f"Content structure differs: {links_diff} link difference, {forms_diff} form difference")
+    
+    if reasons:
+        reason_text = "; ".join(reasons)
+        return True, reason_text
+    else:
+        return False, "No significant differences detected"
+
+def get_dual_analysis_prompt() -> str:
+    """
+    Enhanced prompt for comparative dual analysis.
+    """
+    return """
+    You are analyzing TWO screenshots and datasets from the SAME URL captured with different browsers/user agents to detect evasion techniques.
+
+    ## CRITICAL DUAL ANALYSIS APPROACH
+    **IMPORTANT**: You are receiving data from TWO different browser captures of the same URL. Compare them systematically to identify evasion, targeting, or suspicious differences.
+
+    ## Comparative Analysis Framework
+    
+    1. **Screenshot Comparison** (MOST IMPORTANT)
+    - Are the screenshots visually identical or different?
+    - If different: What specific visual elements differ?
+    - Does one appear legitimate while the other appears malicious?
+    - Are there different layouts, colors, branding, or content?
+    
+    2. **Content Structure Comparison**
+    - Compare the number and types of links between both results
+    - Compare the forms and their targets between both results
+    - Are there different HTML structures or hidden elements?
+    - Do the extracted links lead to different destinations?
+    
+    3. **URL and Redirect Analysis**
+    - Compare the final URLs both browsers reached
+    - If different: This indicates redirect-based evasion
+    - Analyze if one redirect appears legitimate vs malicious
+    
+    4. **Browser/User Agent Targeting Detection**
+    - Identify if the site serves different content to different browsers
+    - Look for mobile vs desktop targeting
+    - Check for browser-specific exploits or content
+    
+    5. **Evasion Technique Identification**
+    - Browser fingerprinting and discrimination
+    - Conditional redirects based on user agent
+    - Cloaking legitimate content from certain browsers
+    - Serving malicious content only to specific browsers
+    
+    6. **Threat Assessment**
+    - Which result (if any) appears to be the malicious version?
+    - Is this sophisticated evasion or legitimate browser differences?
+    - What is the primary threat vector being used?
+    
+    ## Response Requirements
+    
+    ### Comparison Summary
+    Start with a clear comparison: "DUAL BROWSER ANALYSIS: Comparing [Browser1] vs [Browser2] results..."
+    
+    ### Key Differences
+    List the specific differences found between the two results.
+    
+    ### Evasion Assessment
+    Determine if differences indicate malicious evasion or legitimate variation.
+    
+    ### Risk Assessment Format
+    Conclude with: RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning based on comparison]
+    
+    ### Enhanced Risk Guidelines for Dual Analysis
+    - **Low Risk**: Minor browser differences, similar content, no evasion detected
+    - **Medium Risk**: Some differences present but could be legitimate browser variations
+    - **High Risk**: Clear evasion detected, different malicious vs legitimate content, sophisticated targeting
+    
+    Remember: The presence of browser-specific differences in phishing contexts is often a strong indicator of sophisticated evasion techniques.
+    """
+
+def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes, webpage_url: str, data1: dict, data2: dict, prompt_text: str) -> str:
+    """
+    Sends two screenshots and datasets to Gemini for comparative analysis.
+    """
+    print(f"Sending dual analysis (2 screenshots + data) to Gemini API for '{webpage_url}'")
+    try:
+        base64_image1 = base64.b64encode(screenshot1_bytes).decode('utf-8')
+        base64_image2 = base64.b64encode(screenshot2_bytes).decode('utf-8')
+        headers = {'Content-Type': 'application/json'}
+
+        # Create comparative technical summary
+        technical_summary = f"""
+
+## DUAL BROWSER TECHNICAL COMPARISON
+**ANALYSIS TYPE**: Comparative analysis of the same URL from two different browser/user-agent combinations.
+
+### Browser 1 Analysis: {data1.get('user_agent', 'Unknown')}
+**Final URL**: {data1.get('final_url', 'Unknown')}
+**Page Title**: {data1.get('title', 'Unknown')}
+**Links Found**: {len(data1.get('links', []))} - {json.dumps(data1.get('links', [])[:15])}
+**Forms Found**: {len(data1.get('forms', []))} - {json.dumps(data1.get('forms', []))}
+**HTML Length**: {len(data1.get('html', ''))} characters
+
+### Browser 2 Analysis: {data2.get('user_agent', 'Unknown')}
+**Final URL**: {data2.get('final_url', 'Unknown')}
+**Page Title**: {data2.get('title', 'Unknown')}
+**Links Found**: {len(data2.get('links', []))} - {json.dumps(data2.get('links', [])[:15])}
+**Forms Found**: {len(data2.get('forms', []))} - {json.dumps(data2.get('forms', []))}
+**HTML Length**: {len(data2.get('html', ''))} characters
+
+### Critical Comparison Points:
+- **URL Consistency**: Do both browsers end up at the same final URL?
+- **Content Consistency**: Are the links, forms, and content similar?
+- **Visual Consistency**: Do the screenshots show the same page layout and content?
+- **Suspicious Patterns**: Any evidence of browser-specific targeting or evasion?
+
+### Analysis Instructions:
+1. **Compare screenshots side-by-side** for visual differences
+2. **Cross-reference technical data** with visual content
+3. **Identify any evasion techniques** or browser discrimination
+4. **Determine which result (if any) represents the genuine threat**
+5. **Assess the sophistication** of any detected evasion methods
+
+**REMEMBER**: Sophisticated phishing often uses browser fingerprinting to serve different content to different browsers, security tools, or user agents.
+"""
+
+        # Combine the base prompt with technical summary
+        full_prompt_for_ai = f"{prompt_text}{technical_summary}"
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/png", "data": base64_image1}},
+                        {"inlineData": {"mimeType": "image/png", "data": base64_image2}},
+                        {"text": full_prompt_for_ai},
+                    ]
+                }
+            ]
+        }
+
+        response = requests.post(GEMINI_API_URL, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()
+        result = response.json()
+
+        # Extract text response (same logic as single analysis)
+        if result.get("candidates"):
+            candidate = result["candidates"][0]
+            if candidate.get("content"):
+                content = candidate["content"]
+                if content.get("parts") and isinstance(content["parts"], list):
+                    identified_text = ""
+                    for part in content["parts"]:
+                        if part.get("text"):
+                            identified_text += part["text"]
+                    if identified_text:
+                        return identified_text
+
+        return "Could not get a clear dual analysis from the AI."
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error during dual AI analysis: {e}")
+        return f"Dual AI analysis failed: {e}"
+    except Exception as e:
+        print(f"Unexpected error in dual analysis: {e}")
+        return f"Dual analysis error: {e}"
+
+async def analyze_with_smart_dual_ai(target_url: str, browser_results: dict) -> str:
+    """
+    Smart analysis that uses dual AI analysis only when significant differences are detected.
+    """
+    
+    # Check if dual analysis is warranted
+    use_dual, reason = should_use_dual_analysis(browser_results)
+    
+    if use_dual:
+        print(f"🔍 Using DUAL AI analysis - Reason: {reason}")
+        return await analyze_with_dual_ai(target_url, browser_results)
+    else:
+        print(f"✅ Using SINGLE AI analysis - {reason}")
+        return await analyze_with_single_ai(target_url, browser_results)
+
+async def analyze_with_dual_ai(target_url: str, browser_results: dict) -> str:
+    """
+    Performs dual AI analysis comparing top 2 results.
+    """
+    top_2 = get_top_2_results(browser_results)
+    
+    if len(top_2) < 2:
+        print("⚠️ Insufficient results for dual analysis, falling back to single")
+        return await analyze_with_single_ai(target_url, browser_results)
+    
+    result1_ua, result1_data = top_2[0]
+    result2_ua, result2_data = top_2[1]
+    
+    print(f"📊 Dual analysis: {result1_ua} vs {result2_ua}")
+    
+    # Prepare data for dual analysis
+    data1 = {
+        "user_agent": result1_ua,
+        "final_url": result1_data.get("final_url"),
+        "title": result1_data.get("title"),
+        "links": result1_data.get("links", []),
+        "forms": result1_data.get("forms", []),
+        "html": result1_data.get("html", "")
+    }
+    
+    data2 = {
+        "user_agent": result2_ua,
+        "final_url": result2_data.get("final_url"),
+        "title": result2_data.get("title"),
+        "links": result2_data.get("links", []),
+        "forms": result2_data.get("forms", []),
+        "html": result2_data.get("html", "")
+    }
+    
+    # Run dual AI analysis
+    ai_identification = await asyncio.to_thread(
+        identify_with_gemini_dual,
+        result1_data["screenshot"],
+        result2_data["screenshot"],
+        target_url,
+        data1,
+        data2,
+        get_dual_analysis_prompt()
+    )
+    
+    final_report = f"""
+{ai_identification}
+
+{"="*60}
+SMART DUAL BROWSER ANALYSIS SUMMARY
+{"="*60}
+🔍 DUAL ANALYSIS TRIGGERED - Significant differences detected:
+
+🥇 Primary Result: {result1_ua} ({result1_data.get('browser_type', 'unknown')})
+   • Title: '{result1_data.get('title', 'Unknown')[:50]}...'
+   • Final URL: {result1_data.get('final_url', 'Unknown')}
+   • Content: {len(result1_data.get('links', []))} links, {len(result1_data.get('forms', []))} forms
+
+🥈 Secondary Result: {result2_ua} ({result2_data.get('browser_type', 'unknown')})
+   • Title: '{result2_data.get('title', 'Unknown')[:50]}...'
+   • Final URL: {result2_data.get('final_url', 'Unknown')}
+   • Content: {len(result2_data.get('links', []))} links, {len(result2_data.get('forms', []))} forms
+
+📋 All Browser Results:
+"""
+    
+    for ua_key, result in browser_results.items():
+        if "error" in result:
+            final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
+        else:
+            browser_type = result.get('browser_type', 'unknown')
+            final_report += f"✅ {ua_key} ({browser_type}): '{result.get('title', '')[:30]}...', {len(result.get('links', []))} links, {len(result.get('forms', []))} forms\n"
+    
+    final_report += f"\n⚠️ Dual analysis used due to significant browser differences."
+    
+    return final_report
+
+async def analyze_with_single_ai(target_url: str, browser_results: dict) -> str:
+    """
+    Standard single AI analysis using the best result.
+    """
+    best_result = select_best_result(browser_results)
+    
+    if not best_result:
+        return "❌ All browser tests failed - site may be blocking automated access or is unreachable."
+    
+    best_ua, best_data = best_result
+    print(f"📊 Single analysis using: {best_ua} ({best_data.get('browser_type', 'unknown')})")
+    
+    # Run single AI analysis (existing logic)
+    ai_identification = await asyncio.to_thread(
+        identify_with_gemini,
+        best_data["screenshot"],
+        target_url,
+        {
+            "links": best_data["links"],
+            "forms": best_data["forms"], 
+            "html": best_data["html"]
+        },
+        get_enhanced_prompt_with_browser_analysis(browser_results)
+    )
+    
+    # Create standard report
+    final_report = f"""
+{ai_identification}
+
+{"="*60}
+SINGLE BROWSER ANALYSIS SUMMARY
+{"="*60}
+✅ SINGLE ANALYSIS USED - No significant differences detected between browsers.
+
+📊 Analysis based on: {best_ua} ({best_data.get('browser_type', 'unknown')})
+   • Title: '{best_data.get('title', 'Unknown')[:50]}...'
+   • Final URL: {best_data.get('final_url', 'Unknown')}
+   • Content: {len(best_data.get('links', []))} links, {len(best_data.get('forms', []))} forms
+
+📋 All Browser Results:
+"""
+    
+    for ua_key, result in browser_results.items():
+        if "error" in result:
+            final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
+        else:
+            browser_type = result.get('browser_type', 'unknown')
+            final_report += f"✅ {ua_key} ({browser_type}): '{result.get('title', '')[:30]}...', {len(result.get('links', []))} links, {len(result.get('forms', []))} forms\n"
+    
+    return final_report
+
 def select_best_result(browser_results: dict) -> tuple:
     """
     Selects the best result from browser tests.
@@ -413,11 +798,7 @@ def select_best_result(browser_results: dict) -> tuple:
     best_result = None
     
     for ua_key, result in successful_results.items():
-        score = (
-            len(result.get("html", "")) + 
-            len(result.get("links", [])) * 100 + 
-            len(result.get("forms", [])) * 200
-        )
+        score = calculate_score(result)
         
         if score > best_score:
             best_score = score
@@ -733,105 +1114,39 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
         print(f"An unexpected error occurred: {e}")
         return f"An error occurred: {e}"
 
+# Updated main analysis function with smart hybrid approach
 async def analyze_url_for_phishing(target_url: str) -> str:
     """
-    Main function for phishing analysis - now uses dual browser approach.
+    Main function for phishing analysis - now uses smart hybrid dual browser approach.
     This maintains compatibility with the Telegram bot.
     """
+    # Normalize the URL to ensure it has a protocol
     target_url = normalize_url(target_url)
     
-    # Timeout for AI analysis in seconds for internal timeout to prevent long waits
-    AI_ANALYSIS_TIMEOUT = 120 
+    # Timeout for AI analysis in seconds - increased for potential dual analysis
+    AI_ANALYSIS_TIMEOUT = 180
     
     async def analysis_logic():
-        # Use dual browser analysis as the default
-        print(f"🔍 Starting enhanced dual-browser phishing analysis for: {target_url}")
+        print(f"🔍 Starting smart hybrid dual-browser phishing analysis for: {target_url}")
         print("-" * 80)
         
         # Test with multiple browsers and user agents
         browser_results = await analyze_with_dual_browsers(target_url)
         
-        # Select best result for AI analysis
-        best_result = select_best_result(browser_results)
-        
-        if not best_result:
-            return "❌ All browser tests failed - site may be blocking automated access or is unreachable."
-        
-        best_ua, best_data = best_result
-        print(f"📊 Using {best_ua} ({best_data.get('browser_type', 'unknown')}) result for AI analysis")
-        
-        # Run AI analysis on best result
-        ai_identification = await asyncio.to_thread(
-            identify_with_gemini,
-            best_data["screenshot"],
-            target_url,
-            {
-                "links": best_data["links"],
-                "forms": best_data["forms"], 
-                "html": best_data["html"]
-            },
-            get_enhanced_prompt_with_browser_analysis(browser_results)
-        )
-        
-        # Create comprehensive report
-        final_report = f"""
-{ai_identification}
-
-{"="*60}
-DUAL BROWSER ANALYSIS SUMMARY
-{"="*60}
-Tested {len(browser_results)} browser/user-agent combinations:
-
-"""
-        
-        for ua_key, result in browser_results.items():
-            if "error" in result:
-                final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
-            else:
-                browser_type = result.get('browser_type', 'unknown')
-                final_report += f"✅ {ua_key} ({browser_type}): '{result['title'][:30]}...', {len(result['links'])} links, {len(result['forms'])} forms\n"
-        
-        # Check for suspicious differences between browsers
-        firefox_results = [v for v in browser_results.values() if v.get("browser_type") == "firefox" and "error" not in v]
-        chromium_results = [v for v in browser_results.values() if v.get("browser_type") == "chromium" and "error" not in v]
-        
-        if firefox_results and chromium_results:
-            firefox_titles = set(v.get("title", "") for v in firefox_results)
-            chromium_titles = set(v.get("title", "") for v in chromium_results)
-            
-            if firefox_titles != chromium_titles:
-                final_report += f"\n🚨 BROWSER EVASION DETECTED: Different page titles between Firefox and Chromium\n"
-                final_report += f"   Firefox: {list(firefox_titles)}\n"
-                final_report += f"   Chromium: {list(chromium_titles)}\n"
-            else:
-                final_report += f"\n✅ No suspicious browser-specific differences detected.\n"
-        
-        final_report += f"\nAnalysis based on: {best_ua} ({best_data.get('browser_type', 'unknown')})"
-        
-        print("\n" + "="*60)
-        print("ENHANCED PHISHING DETECTION ANALYSIS RESULTS")
-        print("="*60)
-        print(f"URL: {target_url}")
-        print("-" * 60)
-        
-        return final_report
+        # Smart hybrid analysis decision
+        return await analyze_with_smart_dual_ai(target_url, browser_results)
 
     try:
-        # Wrap the entire analysis logic in a timeout
         return await asyncio.wait_for(analysis_logic(), timeout=AI_ANALYSIS_TIMEOUT)
     except asyncio.CancelledError:
-        # This block is new. It catches the cancellation signal.
         print(f"AI analysis for {target_url} was cancelled.")
-        raise  # Re-raise the exception to ensure the task is properly marked as cancelled.
+        raise
     except asyncio.TimeoutError:
         print(f"AI analysis for {target_url} timed out after {AI_ANALYSIS_TIMEOUT} seconds.")
-        # Return a standardized timeout message
-        return "[TIMED OUT] AI analysis timed out. This can happen with slow or complex websites."
+        return "[TIMED OUT] Smart hybrid analysis timed out. This can happen with complex websites or dual analysis."
     except Exception as e:
-        print(f"\nProcess failed with error: {e}")
-        # Return a standardized error message
-        return f"[ERROR] AI analysis failed due to an error: {e}"
-
+        print(f"\nSmart hybrid analysis failed with error: {e}")
+        return f"[ERROR] Smart hybrid analysis failed: {e}"
 
 # --- Main Execution (only runs when script is executed directly) ---
 if __name__ == "__main__":
@@ -839,7 +1154,7 @@ if __name__ == "__main__":
     target_url = input("Enter URL: ")
     
     try:
-        print("Using enhanced dual browser analysis...")
+        print("Using smart hybrid dual browser analysis...")
         analysis_result = asyncio.run(analyze_url_for_phishing(target_url))
         
         print("\n" + "="*80)
