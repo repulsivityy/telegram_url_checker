@@ -751,10 +751,11 @@ async def analyze_url_for_phishing(target_url: str) -> str:
 # --- Main Execution (only runs when script is executed directly) ---
 if __name__ == "__main__":
     # Example usage when run as a standalone script
-    target_url = "https://psuksemsou.xyz/"  # Your example URL
+    target_url = input("Enter URL:")  #"https://psuksemsou.xyz/"  # Your example URL
     
     try:
         analysis_result = asyncio.run(analyze_url_for_phishing(target_url))
         # The result is now correctly retrieved
     except Exception as e:
         print(f"Script execution terminated due to an error: {e}")
+
