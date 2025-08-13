@@ -188,32 +188,138 @@ async def take_screenshot_firefox_enhanced(url: str) -> dict:
         print(f"Firefox analysis failed: {e}")
         raise
 
-def _clean_html_for_analysis(html_content: str, max_length: int = 8000) -> str:
+async def extract_basic_dom_data(page):
     """
-    Clean and truncate HTML content for AI analysis.
-    Removes excessive whitespace and limits length to stay within token limits.
+    Extracts basic DOM data that can be used in fallback methods.
+    Returns the same structure as the enhanced method.
+    """
+    try:
+        print("Extracting basic DOM information...")
+        
+        # Enhanced link extraction - capture more than just <a> tags
+        links = await page.evaluate('''() => {
+            const links = [];
+            
+            // Standard <a> tags
+            document.querySelectorAll('a[href]').forEach(el => {
+                links.push(el.href);
+            });
+            
+            // Forms with actions
+            document.querySelectorAll('form[action]').forEach(el => {
+                links.push(el.action);
+            });
+            
+            // Iframes (potential redirects)
+            document.querySelectorAll('iframe[src]').forEach(el => {
+                links.push(el.src);
+            });
+            
+            // Meta redirects
+            document.querySelectorAll('meta[http-equiv="refresh"]').forEach(el => {
+                const content = el.getAttribute('content');
+                if (content && content.includes('url=')) {
+                    const url = content.split('url=')[1];
+                    links.push(url);
+                }
+            });
+            
+            // Images (could be tracking pixels or suspicious)
+            document.querySelectorAll('img[src]').forEach(el => {
+                if (el.src.startsWith('http')) {
+                    links.push(el.src);
+                }
+            });
+            
+            return [...new Set(links)]; // Remove duplicates
+        }''')
+        
+        # Form actions (keep separate for compatibility)
+        forms = await page.evaluate('''() => {
+            return Array.from(document.querySelectorAll('form[action]')).map(el => el.action);
+        }''')
+        
+        # Get HTML content
+        html_content = await page.content()
+        
+        print(f"Basic DOM extraction successful: {len(links)} links, {len(forms)} forms")
+        
+        return {
+            "links": links,
+            "forms": forms,
+            "html": html_content,
+        }
+        
+    except Exception as e:
+        print(f"Basic DOM extraction failed: {e}")
+        return {
+            "links": [],
+            "forms": [],
+            "html": "",
+        }
+
+def _clean_html_for_analysis(html_content: str, max_length: int = 10000) -> str:
+    """
+    Security-focused HTML cleaning that preserves potential threat indicators.
+    KEEPS comments and base64 data as they may contain malicious content.
     """
     if not html_content:
         return "HTML not available."
     
     import re
     
-    # Remove script and style content (they're usually not relevant for phishing detection)
-    html_content = re.sub(r'<script.*?</script>', '[SCRIPT REMOVED]', html_content, flags=re.DOTALL | re.IGNORECASE)
-    html_content = re.sub(r'<style.*?</style>', '[STYLE REMOVED]', html_content, flags=re.DOTALL | re.IGNORECASE)
+    # Only remove scripts and styles (but preserve their presence)
+    # Keep the opening tags so AI knows they existed
+    html_content = re.sub(r'<script[^>]*>.*?</script>', '<script>[CONTENT_REMOVED_FOR_ANALYSIS]</script>', html_content, flags=re.DOTALL | re.IGNORECASE)
+    html_content = re.sub(r'<style[^>]*>.*?</style>', '<style>[CONTENT_REMOVED_FOR_ANALYSIS]</style>', html_content, flags=re.DOTALL | re.IGNORECASE)
     
-    # Remove excessive whitespace
-    html_content = re.sub(r'\s+', ' ', html_content)
+    # KEEP comments and base64 data - they may contain malicious indicators!
+    # DO NOT remove: <!--comments--> or data:base64 content
+    
+    # Only remove excessive whitespace (but preserve line breaks for readability)
+    html_content = re.sub(r'[ \t]+', ' ', html_content)  # Multiple spaces/tabs to single space
+    html_content = re.sub(r'\n\s*\n', '\n', html_content)  # Multiple newlines to single
     html_content = html_content.strip()
     
-    # Truncate if too long, but try to keep complete tags
+    # Intelligent truncation prioritizing security-relevant sections
     if len(html_content) > max_length:
-        html_content = html_content[:max_length]
-        # Try to end at a complete tag
-        last_tag_end = html_content.rfind('>')
-        if last_tag_end > max_length * 0.8:  # Only truncate if we're not losing too much
-            html_content = html_content[:last_tag_end + 1]
-        html_content += "\n[... HTML truncated for analysis ...]"
+        # Priority order: head > forms > body content
+        head_match = re.search(r'<head.*?</head>', html_content, re.DOTALL | re.IGNORECASE)
+        
+        # Find forms (high priority for phishing detection)
+        forms = list(re.finditer(r'<form.*?</form>', html_content, re.DOTALL | re.IGNORECASE))
+        
+        preserved_content = ""
+        remaining_length = max_length - 100  # Reserve space for truncation notice
+        
+        # Always include head if present
+        if head_match and remaining_length > 0:
+            head_content = head_match.group(0)
+            if len(head_content) <= remaining_length:
+                preserved_content += head_content + "\n"
+                remaining_length -= len(head_content)
+        
+        # Include all forms if they fit
+        for form_match in forms:
+            form_content = form_match.group(0)
+            if len(form_content) <= remaining_length:
+                preserved_content += form_content + "\n"
+                remaining_length -= len(form_content)
+            else:
+                break
+        
+        # Fill remaining space with body content
+        if remaining_length > 500:  # Only if there's meaningful space left
+            body_start = html_content.find('<body')
+            if body_start > -1:
+                body_content = html_content[body_start:body_start + remaining_length]
+                # Try to end at a complete tag
+                last_tag_end = body_content.rfind('>')
+                if last_tag_end > len(body_content) * 0.8:
+                    body_content = body_content[:last_tag_end + 1]
+                preserved_content += body_content
+        
+        html_content = preserved_content + "\n[... HTML truncated - forms and head preserved for security analysis ...]"
     
     return html_content
 
@@ -364,12 +470,15 @@ async def take_screenshot_with_fallback(url: str) -> dict:
                 await page.set_viewport_size({"width": 1280, "height": 720})
                 await page.goto(url, wait_until="commit", timeout=60000)
                 await page.wait_for_timeout(5000)
+                # Extract DOM data before screenshot
+                dom_data = await extract_basic_dom_data(page)
                 screenshot_bytes = await page.screenshot(full_page=True)
                 await context.close()
                 await browser.close()
                 print("Fallback Firefox method (minimal prefs) succeeded.")
-                # Return screenshot with empty DOM data to maintain type consistency
-                return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
+                # Return screenshot with DOM data
+                dom_data["screenshot"] = screenshot_bytes
+                return dom_data
                 
         except Exception as e_firefox_fallback:
             print(f"Firefox fallback method also failed: {e_firefox_fallback}")
@@ -391,11 +500,15 @@ async def take_screenshot_with_fallback(url: str) -> dict:
                         await page.set_viewport_size({"width": 1280, "height": 720})
                         await page.goto(http_url, timeout=45000)
                         await page.wait_for_timeout(3000)
+                        # Extract DOM data before screenshot
+                        dom_data = await extract_basic_dom_data(page)
                         screenshot_bytes = await page.screenshot(full_page=True)
                         await browser.close()
                         print("HTTP fallback method succeeded.")
-                        return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
-                        
+                        # Return screenshot with DOM data
+                        dom_data["screenshot"] = screenshot_bytes
+                        return dom_data
+         
                 except Exception as e_http_fallback:
                     print(f"HTTP fallback also failed: {e_http_fallback}")
             
@@ -427,11 +540,15 @@ async def take_screenshot_with_fallback(url: str) -> dict:
                     await page.set_viewport_size({"width": 1280, "height": 720})
                     await page.goto(url, wait_until="commit", timeout=45000)
                     await page.wait_for_timeout(3000)
+                    # Extract DOM data before screenshot
+                    dom_data = await extract_basic_dom_data(page)
                     screenshot_bytes = await page.screenshot(full_page=True)
                     await context.close()
                     await browser.close()
                     print("Chromium fallback method succeeded.")
-                    return {"screenshot": screenshot_bytes, "links": [], "forms": [], "html": ""}
+                    # Return screenshot with DOM data
+                    dom_data["screenshot"] = screenshot_bytes
+                    return dom_data
                     
             except Exception as e_chromium_fallback:
                 print(f"Chromium fallback also failed: {e_chromium_fallback}")
@@ -634,7 +751,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
 # --- Main Execution (only runs when script is executed directly) ---
 if __name__ == "__main__":
     # Example usage when run as a standalone script
-    target_url = "https://googlno.com/"  # Your example URL
+    target_url = "https://psuksemsou.xyz/"  # Your example URL
     
     try:
         analysis_result = asyncio.run(analyze_url_for_phishing(target_url))
