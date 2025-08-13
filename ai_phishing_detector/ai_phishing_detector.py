@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright
 import asyncio
 
 API_KEY = os.environ.get("GEMINI_APIKEY")
-GEMINI_MODEL = "gemini-2.5-flash-preview-05-20" # Model for image understanding
+GEMINI_MODEL = "gemini-2.5-flash" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
 async def take_screenshot_firefox_enhanced(url: str) -> dict:
