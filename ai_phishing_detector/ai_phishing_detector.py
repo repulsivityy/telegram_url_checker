@@ -6,7 +6,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 1.5
+# Version: 1.6
 #############
 
 import base64
