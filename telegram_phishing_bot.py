@@ -18,7 +18,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.1.4
+# version: 2.1.5
 """
 
 import os
@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import asyncio # For asyncio tasks and timeouts coming from gemini analysis for screenshots
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -242,7 +241,7 @@ class VirusTotalChecker(BaseChecker):
             })
         else:
             if DEBUG_MODE:
-                logger.info("🔍 VT No GTI assessment found")
+                logger.info(f"🔍 VT No GTI assessment found")
             is_malicious = risk_factors["is_malicious_threshold"]
         
         return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=details, risk_factors=risk_factors, is_pending=False)
@@ -604,7 +603,7 @@ class TelegramBot:
             if self._session_close_task and not self._session_close_task.done(): 
                 self._session_close_task.cancel()
             if self._session is None or self._session.closed:
-                logger.info("Creating new aiohttp.ClientSession.")
+                logger.info(f"Creating new aiohttp.ClientSession.")
                 self._session = aiohttp.ClientSession()
             return self._session
 
@@ -617,7 +616,7 @@ class TelegramBot:
             await asyncio.sleep(delay)
             async with self._session_lock:
                 if self._session and not self._session.closed:
-                    logger.info("Idle timeout reached. Closing ClientSession.")
+                    logger.info(f"Idle timeout reached. Closing ClientSession.")
                     await self._session.close()
         except asyncio.CancelledError:
             pass
@@ -805,7 +804,7 @@ class TelegramBot:
 
 def main():
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.startswith("YOUR_"):
-        logger.critical("TELEGRAM_TOKEN is not set. The bot cannot start.")
+        logger.critical(f"TELEGRAM_TOKEN is not set. The bot cannot start.")
         return
         
     bot = TelegramBot(TELEGRAM_TOKEN)
