@@ -1,1 +1,7 @@
 .DS_Store
+ai_phishing_detector/package-lock.json
+ai_phishing_detector/package.json
+ai_phishing_detector/playwright.config.ts
+ai_phishing_detector/tests-examples/demo-todo-app.spec.ts
+ai_phishing_detector/tests/example.spec.ts
+.env
