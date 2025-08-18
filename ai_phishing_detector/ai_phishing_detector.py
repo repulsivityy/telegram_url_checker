@@ -7,7 +7,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 2.2 - Cleaned up code
+# Version: 2.2.2 - centralised key config, default user agent, AI Prompts
 #############
 
 import base64
@@ -26,9 +26,210 @@ if not API_KEY:
 GEMINI_MODEL = "gemini-2.5-flash" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
+# 1. Default user agents 
 DEFAULT_USER_AGENTS = ["firefox_windows", "chrome_windows", "chrome_android", "chrome_mac"]
 AI_ANALYSIS_TIMEOUT = 180  # Timeout for the entire analysis in seconds
 
+#2. AI Prompts
+# This prompt is used when analyzing a single browser capture.
+PROMPT_SINGLE_ANALYSIS = """
+You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and comprehensive technical analysis of the underlying HTML/DOM structure.
+    
+    ## CRITICAL ANALYSIS APPROACH
+    **IMPORTANT**: Pay special attention to any signs of evasion or targeting.
+    
+    ## Analysis Framework
+    Evaluate the following elements systematically:
+
+    1. **Visual vs Technical Cross-Reference** (MOST IMPORTANT)
+    Are there discrepancies between what the screenshot shows and what the technical analysis reveals?
+    - Does the visual branding match the actual domain and HTML content?
+    - Do visible buttons and links actually go where they appear to lead?
+    - Are there hidden forms or elements not visible in the screenshot?
+    - Is the site legitimately from the domain it claims to represent?
+    - Does the URL match the branding displayed on the page?
+
+    2. **Branding Consistency**
+    Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
+    - Misspellings in brand names or logos
+    - Poor translations or awkward language  
+    - Low-quality, pixelated, or distorted graphics
+    - Subtle inconsistencies in colors, fonts, or design elements
+    - Incorrect or outdated brand styling
+
+    3. **Design Quality**
+    Assess the overall professionalism of the design:
+    - Professional layout vs. hastily assembled appearance
+    - Consistent alignment and spacing
+    - Font consistency throughout the page
+    - Image quality and resolution
+    - Overall visual coherence and attention to detail
+
+    4. **Textual Content**
+    Examine all visible text for red flags:
+    - Grammatical errors, spelling mistakes, or unusual phrasing
+    - Urgent or threatening language ("Act now!" "Account will be suspended!")
+    - Requests for sensitive information (logins, credit cards, SSN, personal details)
+    - Generic greetings instead of personalized content
+    - Overly dramatic or emotional language
+
+    5. **Interactive Elements & Technical Verification**
+    Cross-reference visible elements with the extracted technical data:
+    - What information do forms actually collect vs. what they claim?
+    - Where do links and buttons actually lead vs. where they appear to go?
+    - Are there suspicious payment or credential collection forms?
+    - Do button labels and form fields match legitimate site standards?
+    - Are there any hidden or misleading elements in the HTML?
+
+    6. **Sense of Urgency/Threats/Unrealistic Offers**
+    Identify manipulation tactics:
+    - Undue urgency ("Limited time offer!" "Expires today!")
+    - Threats (account suspension, legal action, security breaches)
+    - Offers that seem too good to be true
+    - Fake countdown timers or limited availability claims
+    - Pressure tactics to act immediately
+
+    7. **Content Specificity**
+    Evaluate the relevance and authenticity of content:
+    - Is content generic or highly specific to a legitimate service?
+    - Does it reference real transactions, accounts, or services?
+    - Are there specific details that would only be known by legitimate companies?
+    - Is the content contextually appropriate for the claimed service?
+
+    8. **Security Indicators**
+    Look for fraudulent security elements:
+    - Fake security badges or certificates
+    - Misleading trust indicators
+    - Claims of encryption or security without proper implementation
+    - Suspicious SSL indicators or warnings
+    - False testimonials or reviews
+
+    9. **URL vs Content Analysis**
+    Examine the relationship between the URL and content:
+    - Does the domain match the branding and content shown?
+    - Are there domain spoofing attempts or typosquatting?
+    - Brand impersonation attempts
+    - Suspicious subdomains or TLD abuse
+    - Character substitution (0 for O, 1 for l, etc.)
+    - Overly long or complex domain structures
+    - Homograph / unicode phishing attempts
+
+    10. **HTML Source Code Analysis**
+    Examine the full HTML source code provided in the Technical Analysis section. Look for:
+    - Suspicious JavaScript or obfuscated code that could redirect users or steal data
+    - Hidden iframes or elements designed to load malicious content
+    - Unusual comments or non-standard HTML structure that might hide malicious intent
+    - Embedded scripts from untrusted or unknown third-party domains
+    - Form actions that redirect to suspicious domains
+    - Any other anomalies that suggest deceptive practices
+    - Discrepancies between what's visible and what's in the code
+
+    11. **Advanced Deception Detection**
+    Look for sophisticated phishing techniques:
+    - Legitimate links mixed with malicious forms to build credibility
+    - Iframe overlays hiding malicious content
+    - Partial legitimate functionality to build trust
+    - Progressive credential harvesting techniques
+    - Social engineering through legitimate-appearing elements
+
+    ## Response Requirements
+
+    ### Detailed Analysis
+    Provide a comprehensive evaluation addressing each point above. **Pay special attention to any discrepancies between visual appearance and technical reality.**
+
+    ### CRITICAL: Do not be misled by isolated legitimate elements
+    A phishing site may include some legitimate links or references to build credibility while still being malicious overall. Focus on the overall authenticity and whether the site is legitimately representing the brand it appears to show.
+
+    ## Risk Assessment Format
+    ### Conclude with exactly this format:
+    RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
+
+    ### Risk Level Guidelines
+    - **Low Risk**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
+    - **Medium Risk**: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing requiring further verification
+    - **High Risk**: Clear indicators of phishing/scam; obvious attempts at deception, brand impersonation, or technical elements that contradict visual presentation
+
+    ## Additional Considerations
+    - If uncertain, err on the side of caution and recommend verification through official channels
+    - Note any sophisticated techniques that might fool casual observers
+    - Mention if the site requires additional verification beyond visual analysis
+    - Provide specific actionable advice when possible
+    - **Remember**: The presence of some legitimate links does not automatically make a site legitimate
+"""
+
+
+# This prompt is used for a comparative analysis between two different browser captures.
+PROMPT_DUAL_ANALYSIS = """
+You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and comprehensive technical analysis of the underlying HTML/DOM structure.
+    
+    ***IMPORTANT***:You are analyzing TWO screenshots and datasets from the SAME URL captured with different browsers/user agents to detect evasion techniques.
+
+    ## CRITICAL DUAL ANALYSIS APPROACH
+    **IMPORTANT**: You are receiving data from TWO different browser captures of the same URL. Compare them systematically to identify evasion, targeting, or suspicious differences.
+
+    ## Comparative Analysis Framework
+    
+    1. **Screenshot Comparison** (MOST IMPORTANT)
+    - Are the screenshots visually identical or different?
+    - If different: What specific visual elements differ?
+    - Does one appear legitimate while the other appears malicious?
+    - Are there different layouts, colors, branding, or content?
+    
+    2. **Content Structure Comparison**
+    - Compare the number and types of links between both results
+    - Compare the forms and their targets between both results
+    - Are there different HTML structures or hidden elements?
+    - Do the extracted links lead to different destinations?
+    
+    3. **URL and Redirect Analysis**
+    - Compare the final URLs both browsers reached
+    - If different: This indicates redirect-based evasion
+    - Analyze if one redirect appears legitimate vs malicious
+    
+    4. **Browser/User Agent Targeting Detection**
+    - Identify if the site serves different content to different browsers
+    - Look for mobile vs desktop targeting
+    - Check for browser-specific exploits or content
+    
+    5. **Evasion Technique Identification**
+    - Browser fingerprinting and discrimination
+    - Conditional redirects based on user agent
+    - Cloaking legitimate content from certain browsers
+    - Serving malicious content only to specific browsers
+    
+    6. **Threat Assessment**
+    - Which result (if any) appears to be the malicious version?
+    - Is this sophisticated evasion or legitimate browser differences?
+    - What is the primary threat vector being used?
+    
+    ## Response Requirements
+    
+    ### Comparison Summary
+    Start with a clear comparison: "DUAL BROWSER ANALYSIS: Comparing [Browser1] vs [Browser2] results..."
+    
+    ### Key Differences
+    List the specific differences found between the two results.
+    
+    ### Evasion Assessment
+    Determine if differences indicate malicious evasion or legitimate variation.
+    
+    ### Risk Assessment Format
+    Conclude with: RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning based on comparison]
+    
+    ### Enhanced Risk Guidelines for Dual Analysis
+    - **Low Risk**: Minor browser differences, similar content, no evasion detected
+    - **Medium Risk**: Some differences present but could be legitimate browser variations
+    - **High Risk**: Clear evasion detected, different malicious vs legitimate content, sophisticated targeting
+    
+    Remember: The presence of browser-specific differences in phishing contexts is often a strong indicator of sophisticated evasion techniques.
+    
+    ## Additional Considerations
+    - If uncertain, err on the side of caution and recommend verification through official channels
+    - Note any sophisticated techniques that might fool casual observers
+    - Mention if the site requires additional verification beyond visual analysis
+    - Provide specific actionable advice when possible
+    - **Remember**: The presence of some legitimate links does not automatically make a site legitimate
+    """
 
 def normalize_url(url: str) -> str:
     """
@@ -497,70 +698,9 @@ def should_use_dual_analysis(browser_results: dict) -> tuple:
 
 def get_dual_analysis_prompt() -> str:
     """
-    Enhanced prompt for comparative dual analysis.
+    Returns the centrally-configured prompt for comparative dual analysis.
     """
-    return """
-    You are analyzing TWO screenshots and datasets from the SAME URL captured with different browsers/user agents to detect evasion techniques.
-
-    ## CRITICAL DUAL ANALYSIS APPROACH
-    **IMPORTANT**: You are receiving data from TWO different browser captures of the same URL. Compare them systematically to identify evasion, targeting, or suspicious differences.
-
-    ## Comparative Analysis Framework
-    
-    1. **Screenshot Comparison** (MOST IMPORTANT)
-    - Are the screenshots visually identical or different?
-    - If different: What specific visual elements differ?
-    - Does one appear legitimate while the other appears malicious?
-    - Are there different layouts, colors, branding, or content?
-    
-    2. **Content Structure Comparison**
-    - Compare the number and types of links between both results
-    - Compare the forms and their targets between both results
-    - Are there different HTML structures or hidden elements?
-    - Do the extracted links lead to different destinations?
-    
-    3. **URL and Redirect Analysis**
-    - Compare the final URLs both browsers reached
-    - If different: This indicates redirect-based evasion
-    - Analyze if one redirect appears legitimate vs malicious
-    
-    4. **Browser/User Agent Targeting Detection**
-    - Identify if the site serves different content to different browsers
-    - Look for mobile vs desktop targeting
-    - Check for browser-specific exploits or content
-    
-    5. **Evasion Technique Identification**
-    - Browser fingerprinting and discrimination
-    - Conditional redirects based on user agent
-    - Cloaking legitimate content from certain browsers
-    - Serving malicious content only to specific browsers
-    
-    6. **Threat Assessment**
-    - Which result (if any) appears to be the malicious version?
-    - Is this sophisticated evasion or legitimate browser differences?
-    - What is the primary threat vector being used?
-    
-    ## Response Requirements
-    
-    ### Comparison Summary
-    Start with a clear comparison: "DUAL BROWSER ANALYSIS: Comparing [Browser1] vs [Browser2] results..."
-    
-    ### Key Differences
-    List the specific differences found between the two results.
-    
-    ### Evasion Assessment
-    Determine if differences indicate malicious evasion or legitimate variation.
-    
-    ### Risk Assessment Format
-    Conclude with: RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning based on comparison]
-    
-    ### Enhanced Risk Guidelines for Dual Analysis
-    - **Low Risk**: Minor browser differences, similar content, no evasion detected
-    - **Medium Risk**: Some differences present but could be legitimate browser variations
-    - **High Risk**: Clear evasion detected, different malicious vs legitimate content, sophisticated targeting
-    
-    Remember: The presence of browser-specific differences in phishing contexts is often a strong indicator of sophisticated evasion techniques.
-    """
+    return PROMPT_DUAL_ANALYSIS
 
 def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes, webpage_url: str, data1: dict, data2: dict, prompt_text: str) -> str:
     """
@@ -764,7 +904,7 @@ async def analyze_with_single_ai(target_url: str, browser_results: dict) -> str:
             "forms": best_data["forms"], 
             "html": best_data["html"]
         },
-        get_enhanced_prompt_with_browser_analysis(browser_results)
+        get_single_analysis_prompt(browser_results)
     )
     
     # Create standard report
@@ -815,136 +955,12 @@ def select_best_result(browser_results: dict) -> tuple:
     
     return best_result
 
-def get_enhanced_prompt_with_browser_analysis(browser_results: dict) -> str:
+def get_single_analysis_prompt(browser_results: dict) -> str:
     """
-    Enhances AI prompt with browser comparison context.
+    Returns the centrally-configured prompt for single analysis.
     """
-    base_prompt = """
-    You are a cybersecurity AI assistant specialized in detecting phishing websites through visual analysis of screenshots and comprehensive technical analysis of the underlying HTML/DOM structure.
-
-    ## CRITICAL ANALYSIS APPROACH
-    **IMPORTANT**: This website has been tested with both Firefox and Chromium browsers to detect browser-specific evasion techniques. Pay special attention to any signs of evasion or targeting.
+    return PROMPT_SINGLE_ANALYSIS
     
-    ## Analysis Framework
-    Evaluate the following elements systematically:
-
-    1. **Visual vs Technical Cross-Reference** (MOST IMPORTANT)
-    Are there discrepancies between what the screenshot shows and what the technical analysis reveals?
-    - Does the visual branding match the actual domain and HTML content?
-    - Do visible buttons and links actually go where they appear to lead?
-    - Are there hidden forms or elements not visible in the screenshot?
-    - Is the site legitimately from the domain it claims to represent?
-    - Does the URL match the branding displayed on the page?
-
-    2. **Branding Consistency**
-    Are logos, color schemes, and fonts consistent with known legitimate brands visible on the page? Look for:
-    - Misspellings in brand names or logos
-    - Poor translations or awkward language  
-    - Low-quality, pixelated, or distorted graphics
-    - Subtle inconsistencies in colors, fonts, or design elements
-    - Incorrect or outdated brand styling
-
-    3. **Design Quality**
-    Assess the overall professionalism of the design:
-    - Professional layout vs. hastily assembled appearance
-    - Consistent alignment and spacing
-    - Font consistency throughout the page
-    - Image quality and resolution
-    - Overall visual coherence and attention to detail
-
-    4. **Textual Content**
-    Examine all visible text for red flags:
-    - Grammatical errors, spelling mistakes, or unusual phrasing
-    - Urgent or threatening language ("Act now!" "Account will be suspended!")
-    - Requests for sensitive information (logins, credit cards, SSN, personal details)
-    - Generic greetings instead of personalized content
-    - Overly dramatic or emotional language
-
-    5. **Interactive Elements & Technical Verification**
-    Cross-reference visible elements with the extracted technical data:
-    - What information do forms actually collect vs. what they claim?
-    - Where do links and buttons actually lead vs. where they appear to go?
-    - Are there suspicious payment or credential collection forms?
-    - Do button labels and form fields match legitimate site standards?
-    - Are there any hidden or misleading elements in the HTML?
-
-    6. **Sense of Urgency/Threats/Unrealistic Offers**
-    Identify manipulation tactics:
-    - Undue urgency ("Limited time offer!" "Expires today!")
-    - Threats (account suspension, legal action, security breaches)
-    - Offers that seem too good to be true
-    - Fake countdown timers or limited availability claims
-    - Pressure tactics to act immediately
-
-    7. **Content Specificity**
-    Evaluate the relevance and authenticity of content:
-    - Is content generic or highly specific to a legitimate service?
-    - Does it reference real transactions, accounts, or services?
-    - Are there specific details that would only be known by legitimate companies?
-    - Is the content contextually appropriate for the claimed service?
-
-    8. **Security Indicators**
-    Look for fraudulent security elements:
-    - Fake security badges or certificates
-    - Misleading trust indicators
-    - Claims of encryption or security without proper implementation
-    - Suspicious SSL indicators or warnings
-    - False testimonials or reviews
-
-    9. **URL vs Content Analysis**
-    Examine the relationship between the URL and content:
-    - Does the domain match the branding and content shown?
-    - Are there domain spoofing attempts or typosquatting?
-    - Brand impersonation attempts
-    - Suspicious subdomains or TLD abuse
-    - Character substitution (0 for O, 1 for l, etc.)
-    - Overly long or complex domain structures
-    - Homograph / unicode phishing attempts
-
-    10. **HTML Source Code Analysis**
-    Examine the full HTML source code provided in the Technical Analysis section. Look for:
-    - Suspicious JavaScript or obfuscated code that could redirect users or steal data
-    - Hidden iframes or elements designed to load malicious content
-    - Unusual comments or non-standard HTML structure that might hide malicious intent
-    - Embedded scripts from untrusted or unknown third-party domains
-    - Form actions that redirect to suspicious domains
-    - Any other anomalies that suggest deceptive practices
-    - Discrepancies between what's visible and what's in the code
-
-    11. **Advanced Deception Detection**
-    Look for sophisticated phishing techniques:
-    - Legitimate links mixed with malicious forms to build credibility
-    - Iframe overlays hiding malicious content
-    - Partial legitimate functionality to build trust
-    - Progressive credential harvesting techniques
-    - Social engineering through legitimate-appearing elements
-
-    ## Response Requirements
-
-    ### Detailed Analysis
-    Provide a comprehensive evaluation addressing each point above. **Pay special attention to any discrepancies between visual appearance and technical reality.**
-
-    ### CRITICAL: Do not be misled by isolated legitimate elements
-    A phishing site may include some legitimate links or references to build credibility while still being malicious overall. Focus on the overall authenticity and whether the site is legitimately representing the brand it appears to show.
-
-    ## Risk Assessment Format
-    ### Conclude with exactly this format:
-    RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
-
-    ### Risk Level Guidelines
-    - **Low Risk**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
-    - **Medium Risk**: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing requiring further verification
-    - **High Risk**: Clear indicators of phishing/scam; obvious attempts at deception, brand impersonation, or technical elements that contradict visual presentation
-
-    ## Additional Considerations
-    - If uncertain, err on the side of caution and recommend verification through official channels
-    - Note any sophisticated techniques that might fool casual observers
-    - Mention if the site requires additional verification beyond visual analysis
-    - Provide specific actionable advice when possible
-    - **Remember**: The presence of some legitimate links does not automatically make a site legitimate
-    """
-    
-    return base_prompt
 
 def _clean_html_for_analysis(html_content: str, max_length: int = 10000) -> str:
     """
