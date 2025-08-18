@@ -7,7 +7,8 @@ VirusTotal/Google Threat Intel API and Google Web Risk API to identify potential
 It provides a standardized response format for users, indicating whether the
 links are safe, suspicious, or malicious. 
 
-It leverages a combination of VT detection ratio, GTI assessment and Web Risk's threat scores to provide a risk assessment.
+It leverages a combination of VT detection ratio, GTI assessment and Web Risk's threat scores to provide a risk assessment. 
+It also includes an AI analysis component that can analyze screenshots of the URLs for phishing characteristics.
 
 Disclaimer: Gemini 2.5 Pro and Claude Sonnet was used to optimise the code for performance and readability.
 
