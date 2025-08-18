@@ -7,7 +7,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 2.1 - Enhanced with dual browser support and smart hybrid analysis
+# Version: 2.2 - Cleaned up code
 #############
 
 import base64
@@ -17,9 +17,18 @@ import os
 from playwright.async_api import async_playwright
 import asyncio
 
+################
+# Configuration
+################
 API_KEY = os.environ.get("GEMINI_APIKEY")
+if not API_KEY:
+    raise ValueError("GEMINI_APIKEY environment variable not set. Please set it before running the script.")
 GEMINI_MODEL = "gemini-2.5-flash" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
+
+DEFAULT_USER_AGENTS = ["firefox_windows", "chrome_windows", "chrome_android", "chrome_mac"]
+AI_ANALYSIS_TIMEOUT = 180  # Timeout for the entire analysis in seconds
+
 
 def normalize_url(url: str) -> str:
     """
@@ -368,8 +377,8 @@ async def analyze_with_dual_browsers(url: str, test_user_agents: list = None) ->
     Analyzes URL with multiple user agents across Firefox and Chromium.
     """
     if test_user_agents is None:
-        # Default focused set - good balance of coverage and speed
-        test_user_agents = ["firefox_windows", "chrome_windows", "chrome_android", "chrome_mac"]
+        # Use the default list from the configuration section
+        test_user_agents = DEFAULT_USER_AGENTS
     
     print(f"🔍 Starting dual-browser analysis for: {url}")
     print(f"Testing {len(test_user_agents)} user agents across Firefox and Chromium")
@@ -1123,9 +1132,6 @@ async def analyze_url_for_phishing(target_url: str) -> str:
     # Normalize the URL to ensure it has a protocol
     target_url = normalize_url(target_url)
     
-    # Timeout for AI analysis in seconds - increased for potential dual analysis
-    AI_ANALYSIS_TIMEOUT = 180
-    
     async def analysis_logic():
         print(f"🔍 Starting smart hybrid dual-browser phishing analysis for: {target_url}")
         print("-" * 80)
@@ -1137,6 +1143,7 @@ async def analyze_url_for_phishing(target_url: str) -> str:
         return await analyze_with_smart_dual_ai(target_url, browser_results)
 
     try:
+        # Use the timeout from the configuration section
         return await asyncio.wait_for(analysis_logic(), timeout=AI_ANALYSIS_TIMEOUT)
     except asyncio.CancelledError:
         print(f"AI analysis for {target_url} was cancelled.")
