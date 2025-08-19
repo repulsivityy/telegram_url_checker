@@ -566,7 +566,7 @@ class ResponseFormatter:
                 if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
                     details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
             else:
-                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes ~45s to complete...")
+                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes ~45 - 60s to complete...")
 
         details_section = "\n".join(filter(None, details_lines))
 
@@ -627,7 +627,8 @@ class TelegramBot:
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = (
-            "I check links against <b>VirusTotal</b> and <b>Google Web Risk</b>.\n\n"
+            "I check links against <b>VirusTotal</b>, <b>Google TI</b> and <b>Google Web Risk</b>.\n"
+            "I use AI to analyse the website for any visual discrepencies, as well as to analyse the source code for signs of phishing.\n\n"
             "<b>Commands:</b>\n"
             "/start - Start the bot\n"
             "/help - Show this help\n"
