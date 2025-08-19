@@ -7,7 +7,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 2.2.2 - centralised key config, default user agent, AI Prompts
+# Version: 2.3 - Implemented iframe checks
 #############
 
 import base64
@@ -142,7 +142,7 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
 
     ## Risk Assessment Format
     ### Conclude with exactly this format:
-    RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning for assessment]
+    RISK ASSESSMENT: Low/Medium/High - Single sentence reasoning for assessment
 
     ### Risk Level Guidelines
     - **Low Risk**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
@@ -214,7 +214,7 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
     Determine if differences indicate malicious evasion or legitimate variation.
     
     ### Risk Assessment Format
-    Conclude with: RISK ASSESSMENT: [Low/Medium/High] - [Single sentence reasoning based on comparison]
+    Conclude with: RISK ASSESSMENT: Low/Medium/High - Single sentence reasoning based on comparison
     
     ### Enhanced Risk Guidelines for Dual Analysis
     - **Low Risk**: Minor browser differences, similar content, no evasion detected
@@ -987,11 +987,14 @@ def _clean_html_for_analysis(html_content: str, max_length: int = 10000) -> str:
     
     # Intelligent truncation prioritizing security-relevant sections
     if len(html_content) > max_length:
-        # Priority order: head > forms > body content
+        # Priority order: head > forms > iframes > body content
         head_match = re.search(r'<head.*?</head>', html_content, re.DOTALL | re.IGNORECASE)
         
         # Find forms (high priority for phishing detection)
         forms = list(re.finditer(r'<form.*?</form>', html_content, re.DOTALL | re.IGNORECASE))
+        
+        # Find iframes (also high priority for deception)
+        iframes = list(re.finditer(r'<iframe.*?</iframe>', html_content, re.DOTALL | re.IGNORECASE))
         
         preserved_content = ""
         remaining_length = max_length - 100  # Reserve space for truncation notice
@@ -1012,6 +1015,15 @@ def _clean_html_for_analysis(html_content: str, max_length: int = 10000) -> str:
             else:
                 break
         
+        # Include all iframes if they fit
+        for iframe_match in iframes:
+            iframe_content = iframe_match.group(0)
+            if len(iframe_content) <= remaining_length:
+                preserved_content += iframe_content + "\n"
+                remaining_length -= len(iframe_content)
+            else:
+                break
+        
         # Fill remaining space with body content
         if remaining_length > 500:  # Only if there's meaningful space left
             body_start = html_content.find('<body')
@@ -1023,7 +1035,7 @@ def _clean_html_for_analysis(html_content: str, max_length: int = 10000) -> str:
                     body_content = body_content[:last_tag_end + 1]
                 preserved_content += body_content
         
-        html_content = preserved_content + "\n[... HTML truncated - forms and head preserved for security analysis ...]"
+        html_content = preserved_content + "\n[... HTML truncated - head, forms, and iframes preserved for security analysis ...]"
     
     return html_content
 
