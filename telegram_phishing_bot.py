@@ -19,7 +19,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.1.7 - updated to parse ai analysis results better
+# version: 2.2 - tweaked response and added more to debug filter
 """
 
 import os
@@ -449,29 +449,42 @@ class AIImageChecker(BaseChecker):
         pass
 
     def _parse_results(self, analysis_text: str) -> ScanResult:
-        #Parses the raw text output from the Gemini AI
-        logger.info(f"AI Analysis response received: {analysis_text}")
+        """Parses the raw text output from the Gemini AI"""
+        logger.info(f"AI Analysis response received: {len(analysis_text)} characters")
+        
         if not analysis_text:
             return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
 
-        # Corrected Regex: Removed the square brackets \[ and \] to match your AI's output
+        # Store the full analysis text
+        details = {"full_analysis": analysis_text}
+        
+        if DEBUG_MODE:
+            logger.info(f"AI Analysis in debug mode - response length: {len(analysis_text)} characters")
+
+        # Parse the risk assessment from the analysis
         match = re.search(r"RISK ASSESSMENT:\s*\**\[?(Low|Medium|High)\]?\**\s*-\s*(.*)", analysis_text, re.IGNORECASE | re.DOTALL)
 
         if match:
             risk_level = match.group(1).lower()
             reason = match.group(2).strip()
-            # is_malicious is only True if AI says High, otherwise it's informational
             is_malicious = risk_level == "high" 
+            
+            # Truncate long reasons for cleaner display in telegram
+            if len(reason) > 200:
+                reason = reason[:200] + "..."
+            
             summary = f"Risk: {risk_level.capitalize()} - {reason}"
             risk_factors = {"ai_risk": risk_level}
-            return ScanResult(is_malicious, summary, self.SOURCE_NAME, details={"full_analysis": analysis_text}, risk_factors=risk_factors)
+            return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=details, risk_factors=risk_factors)
     
         # Fallback if the specific line isn't found
         summary = "Could not determine risk level from AI response."
-        return ScanResult(False, summary, self.SOURCE_NAME, details={"full_analysis": analysis_text}, error=True)
+        return ScanResult(False, summary, self.SOURCE_NAME, details=details, error=True)
 
     async def check(self, value: str, item_type: str) -> ScanResult:
-        """Runs the synchronous AI analysis in a separate thread."""
+        """Runs the AI analysis with debug mode passed from global setting."""
+        global DEBUG_MODE  # Access the global debug flag
+        
         if item_type == 'domain':
             url_to_check = f"https://{value}"
         elif item_type == 'url':
@@ -480,8 +493,8 @@ class AIImageChecker(BaseChecker):
             return ScanResult(False, f"Skipped (not a URL or domain)", self.SOURCE_NAME)
 
         try:
-            # The call is now a direct await since the target function is async
-            analysis_result_string = await analyze_url_for_phishing(url_to_check)
+            # Pass the current DEBUG_MODE to the AI analysis function
+            analysis_result_string = await analyze_url_for_phishing(url_to_check, debug_mode=DEBUG_MODE)
             return self._parse_results(analysis_result_string)
         except Exception as e:
             logger.error(f"{self.SOURCE_NAME} error for {url_to_check}: {e}")
@@ -513,7 +526,6 @@ class ResponseFormatter:
         ai_factors = ai_result.risk_factors
 
         # --- Consolidated DANGER Logic ---
-        # Returns DANGER if any of these conditions are met.
         if (vt_factors.get("gti_verdict") == "VERDICT_MALICIOUS" or 
             (vt_factors.get("gti_score") is not None and vt_factors.get("gti_score") >= 60) or 
             wr_factors.get("has_high_threat") or 
@@ -529,8 +541,9 @@ class ResponseFormatter:
         return "WARNING"
 
     def format_combined_response(self, target: str, results_map: Dict[str, ScanResult], configured_checkers: set) -> str:
-        # This signature is now correct
-
+        """Format combined response. Debug details are now handled at the AI source."""
+        global DEBUG_MODE  # Access global debug flag for status indicator
+        
         vt_result = results_map.get("VirusTotal")
         wr_result = results_map.get("Google Web Risk")
         ai_result = results_map.get("AI Analysis")
@@ -544,7 +557,7 @@ class ResponseFormatter:
 
         details_lines = []
 
-        # This logic now works because 'configured_checkers' is a defined parameter
+        # VirusTotal section
         if "VirusTotal" in configured_checkers:
             if vt_result:
                 details_lines.append(f"VirusTotal: {vt_result.summary}")
@@ -555,29 +568,46 @@ class ResponseFormatter:
             else:
                 details_lines.append("VirusTotal: ⏳ Still analyzing...")
 
+        # Google Web Risk section
         if "Google Web Risk" in configured_checkers:
             if wr_result:
                 details_lines.append(f"Google Web Risk: {wr_result.summary}")
             else:
                 details_lines.append("Google Web Risk: ⏳ Still analyzing...")
 
+        # AI Analysis section
         if "AI Analysis" in configured_checkers:
             if ai_result:
-                details_lines.append(f"AI Analysis: {ai_result.summary}")
-                if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
-                    details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
+                # In debug mode, the AI analysis already includes technical details
+                if DEBUG_MODE and "full_analysis" in ai_result.details:
+                    # Show the full analysis (which already includes debug info if enabled)
+                    details_lines.append(f"AI Analysis: {ai_result.summary}")
+                    details_lines.append("")  # Empty line for separation
+                    details_lines.append("<b>🔍 DEBUG - Full AI Analysis:</b>")
+                    details_lines.append(f"<pre>{ai_result.details['full_analysis']}</pre>")
+                else:
+                    # Normal mode - show only the summary
+                    details_lines.append(f"AI Analysis: {ai_result.summary}")
+                    if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
+                        details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
             else:
                 details_lines.append("AI Analysis: ⏳ Still analyzing... It takes ~45 - 60s to complete...")
 
         details_section = "\n".join(filter(None, details_lines))
 
-        return (
+        response = (
             f"{header}\n"
             f"Link: <code>{defanged_target}</code>\n"
             f"----------------------------------\n"
             f"{details_section}\n\n"
             f"{recommendation}"
         )
+        
+        # Add debug indicator if in debug mode
+        if DEBUG_MODE:
+            response += f"\n\n<i>🔍 Debug mode active</i>"
+            
+        return response
 
 #####################
 # Telegram Bot Implementation
