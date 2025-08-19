@@ -7,7 +7,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 2.3 - Implemented iframe checks
+# Version: 2.3.1 - added full AI response if debug is on
 #############
 
 import base64
@@ -790,22 +790,22 @@ def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes
         print(f"Unexpected error in dual analysis: {e}")
         return f"Dual analysis error: {e}"
 
-async def analyze_with_smart_dual_ai(target_url: str, browser_results: dict) -> str:
+async def analyze_with_smart_dual_ai(target_url: str, browser_results: dict, debug_mode: bool = False) -> str:
     """
     Smart analysis that uses dual AI analysis only when significant differences are detected.
     """
-    
-    # Check if dual analysis is warranted
+
+    # Check if dual analysis is needed
     use_dual, reason = should_use_dual_analysis(browser_results)
     
     if use_dual:
         print(f"🔍 Using DUAL AI analysis - Reason: {reason}")
-        return await analyze_with_dual_ai(target_url, browser_results)
+        return await analyze_with_dual_ai(target_url, browser_results, debug_mode)
     else:
         print(f"✅ Using SINGLE AI analysis - {reason}")
-        return await analyze_with_single_ai(target_url, browser_results)
+        return await analyze_with_single_ai(target_url, browser_results, debug_mode)
 
-async def analyze_with_dual_ai(target_url: str, browser_results: dict) -> str:
+async def analyze_with_dual_ai(target_url: str, browser_results: dict, debug_mode: bool = False) -> str:
     """
     Performs dual AI analysis comparing top 2 results.
     """
@@ -813,7 +813,7 @@ async def analyze_with_dual_ai(target_url: str, browser_results: dict) -> str:
     
     if len(top_2) < 2:
         print("⚠️ Insufficient results for dual analysis, falling back to single")
-        return await analyze_with_single_ai(target_url, browser_results)
+        return await analyze_with_single_ai(target_url, browser_results, debug_mode)
     
     result1_ua, result1_data = top_2[0]
     result2_ua, result2_data = top_2[1]
@@ -850,7 +850,10 @@ async def analyze_with_dual_ai(target_url: str, browser_results: dict) -> str:
         get_dual_analysis_prompt()
     )
     
-    final_report = f"""
+    # Build response based on debug mode
+    if debug_mode:
+        # Include full technical details
+        final_report = f"""
 {ai_identification}
 
 {"="*60}
@@ -870,19 +873,22 @@ SMART DUAL BROWSER ANALYSIS SUMMARY
 
 📋 All Browser Results:
 """
-    
-    for ua_key, result in browser_results.items():
-        if "error" in result:
-            final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
-        else:
-            browser_type = result.get('browser_type', 'unknown')
-            final_report += f"✅ {ua_key} ({browser_type}): '{result.get('title', '')[:30]}...', {len(result.get('links', []))} links, {len(result.get('forms', []))} forms\n"
-    
-    final_report += f"\n⚠️ Dual analysis used due to significant browser differences."
+        
+        for ua_key, result in browser_results.items():
+            if "error" in result:
+                final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
+            else:
+                browser_type = result.get('browser_type', 'unknown')
+                final_report += f"✅ {ua_key} ({browser_type}): '{result.get('title', '')[:30]}...', {len(result.get('links', []))} links, {len(result.get('forms', []))} forms\n"
+        
+        final_report += f"\n⚠️ Dual analysis used due to significant browser differences."
+    else:
+        # Return only the AI analysis without technical details
+        final_report = ai_identification
     
     return final_report
 
-async def analyze_with_single_ai(target_url: str, browser_results: dict) -> str:
+async def analyze_with_single_ai(target_url: str, browser_results: dict, debug_mode: bool = False) -> str:    
     """
     Standard single AI analysis using the best result.
     """
@@ -907,8 +913,10 @@ async def analyze_with_single_ai(target_url: str, browser_results: dict) -> str:
         get_single_analysis_prompt(browser_results)
     )
     
-    # Create standard report
-    final_report = f"""
+    # Build response based on debug mode
+    if debug_mode:
+        # Include technical details
+        final_report = f"""
 {ai_identification}
 
 {"="*60}
@@ -923,13 +931,16 @@ SINGLE BROWSER ANALYSIS SUMMARY
 
 📋 All Browser Results:
 """
-    
-    for ua_key, result in browser_results.items():
-        if "error" in result:
-            final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
-        else:
-            browser_type = result.get('browser_type', 'unknown')
-            final_report += f"✅ {ua_key} ({browser_type}): '{result.get('title', '')[:30]}...', {len(result.get('links', []))} links, {len(result.get('forms', []))} forms\n"
+        
+        for ua_key, result in browser_results.items():
+            if "error" in result:
+                final_report += f"❌ {ua_key} ({result.get('browser_type', 'unknown')}): {result['error']}\n"
+            else:
+                browser_type = result.get('browser_type', 'unknown')
+                final_report += f"✅ {ua_key} ({browser_type}): '{result.get('title', '')[:30]}...', {len(result.get('links', []))} links, {len(result.get('forms', []))} forms\n"
+    else:
+        # Return only the AI analysis without technical details
+        final_report = ai_identification
     
     return final_report
 
@@ -1152,7 +1163,7 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
         return f"An error occurred: {e}"
 
 # Updated main analysis function with smart hybrid approach
-async def analyze_url_for_phishing(target_url: str) -> str:
+async def analyze_url_for_phishing(target_url: str, debug_mode: bool = False) -> str:
     """
     Main function for phishing analysis - now uses smart hybrid dual browser approach.
     This maintains compatibility with the Telegram bot.
@@ -1162,13 +1173,15 @@ async def analyze_url_for_phishing(target_url: str) -> str:
     
     async def analysis_logic():
         print(f"🔍 Starting smart hybrid dual-browser phishing analysis for: {target_url}")
+        if debug_mode:
+            print("🔍 Debug mode enabled - will include technical browser details")
         print("-" * 80)
         
         # Test with multiple browsers and user agents
         browser_results = await analyze_with_dual_browsers(target_url)
         
-        # Smart hybrid analysis decision
-        return await analyze_with_smart_dual_ai(target_url, browser_results)
+        # Smart hybrid analysis decision with debug mode
+        return await analyze_with_smart_dual_ai(target_url, browser_results, debug_mode)
 
     try:
         # Use the timeout from the configuration section
