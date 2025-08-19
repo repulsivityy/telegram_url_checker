@@ -19,7 +19,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.1.6 - updated to reflect ai analysis timing more accurately
+# version: 2.1.7 - updated to parse ai analysis results better
 """
 
 import os
@@ -449,12 +449,13 @@ class AIImageChecker(BaseChecker):
         pass
 
     def _parse_results(self, analysis_text: str) -> ScanResult:
-    #Parses the raw text output from the Gemini AI
+        #Parses the raw text output from the Gemini AI
+        logger.info(f"AI Analysis response received: {analysis_text}")
         if not analysis_text:
             return ScanResult(False, "No analysis data", self.SOURCE_NAME, error=True)
 
         # Corrected Regex: Removed the square brackets \[ and \] to match your AI's output
-        match = re.search(r"RISK ASSESSMENT:\s*(Low|Medium|High)\s*-\s*(.*)", analysis_text, re.IGNORECASE | re.DOTALL)
+        match = re.search(r"RISK ASSESSMENT:\s*\**\[?(Low|Medium|High)\]?\**\s*-\s*(.*)", analysis_text, re.IGNORECASE | re.DOTALL)
 
         if match:
             risk_level = match.group(1).lower()
