@@ -470,8 +470,8 @@ class AIImageChecker(BaseChecker):
             is_malicious = risk_level == "high" 
             
             # Truncate long reasons for cleaner display in telegram
-            if len(reason) > 200:
-                reason = reason[:200] + "..."
+            if len(reason) > 400:
+                reason = reason[:400] + "..."
             
             summary = f"Risk: {risk_level.capitalize()} - {reason}"
             risk_factors = {"ai_risk": risk_level}
