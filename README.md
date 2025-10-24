@@ -192,10 +192,14 @@ docker compose up --build -d
 ```
 Your bot is now running in the background inside a Docker container.
 
+If you need to rebuild your container, run: 
+```bash
+sudo docker compose up --build --force-recreate -d
+```
+
 #### d. Managing the Container
 -   **View logs:** `docker compose logs -f`
 -   **Stop the bot:** `docker compose down`
-
 
 ## How to Use the Bot
 
