@@ -7,7 +7,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version: 2.3.1 - added full AI response if debug is on
+# Version 2.4 - implemented json schema and browser agent concurrency for faster analysis
 #############
 
 import base64
@@ -577,38 +577,47 @@ async def take_screenshot_with_browser(url: str, browser_type: str, user_agent: 
 
 async def analyze_with_dual_browsers(url: str, test_user_agents: list = None) -> dict:
     """
-    Analyzes URL with multiple user agents across Firefox and Chromium.
+    Analyzes URL with multiple user agents concurrently across Firefox and Chromium.
     """
     if test_user_agents is None:
         # Use the default list from the configuration section
         test_user_agents = DEFAULT_USER_AGENTS
     
     print(f"🔍 Starting dual-browser analysis for: {url}")
-    print(f"Testing {len(test_user_agents)} user agents across Firefox and Chromium")
+    print(f"Testing {len(test_user_agents)} user agents concurrently across Firefox and Chromium")
     print("-" * 60)
     
     results = {}
-    
-    for ua_key in test_user_agents:
+
+    async def run_agent(ua_key):
         if ua_key not in USER_AGENTS_WITH_BROWSERS:
             print(f"Warning: Unknown user agent key '{ua_key}', skipping...")
-            continue
-        
+            return ua_key, None
+            
         ua_config = USER_AGENTS_WITH_BROWSERS[ua_key]
         user_agent = ua_config["user_agent"]
         browser_type = ua_config["browser"]
         
         try:
             result = await take_screenshot_with_browser(url, browser_type, user_agent)
-            results[ua_key] = result
+            return ua_key, result
             
         except Exception as e:
             print(f"❌ {ua_key} ({browser_type}) failed: {e}")
-            results[ua_key] = {
+            return ua_key, {
                 "error": str(e), 
                 "user_agent": user_agent, 
                 "browser_type": browser_type
             }
+
+    # Run all configured user agents concurrently
+    tasks = [run_agent(ua_key) for ua_key in test_user_agents]
+    completed_tasks = await asyncio.gather(*tasks)
+    
+    # Reassemble the results map
+    for ua_key, result in completed_tasks:
+        if result is not None:
+            results[ua_key] = result
     
     return results
 
@@ -975,7 +984,7 @@ def get_single_analysis_prompt(browser_results: dict) -> str:
     return PROMPT_SINGLE_ANALYSIS
     
 
-def _clean_html_for_analysis(html_content: str, max_length: int = 10000) -> str:
+def _clean_html_for_analysis(html_content: str, max_length: int = 12000) -> str:
     """
     Security-focused HTML cleaning that preserves potential threat indicators.
     KEEPS comments and base64 data as they may contain malicious content.
