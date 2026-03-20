@@ -1,6 +1,6 @@
 # Phishing Detection Tool with AI
 
-> Disclaimer: A mixture of Claude 4.0 Sonnet and Gemini 2.5 Pro helped optimised the code
+> Disclaimer: A mixture of Claude and Gemini helped optimised the code
 
 A Python script that captures screenshots of potentially malicious websites and analyzes them using Google's Gemini AI to detect phishing attempts and scam indicators.
 
@@ -83,7 +83,7 @@ The script provides:
 
 ## Roadmap utilising Playwright
 
-- [ ] Extract and De-obfuscate JavaScript Files
+- [X] Extract and De-obfuscate JavaScript Files
 - [ ] Network Request Interception (Catching the API endpoints!)
 - [ ] Iframe and Cloaking Unwrapping
 - [ ] Bypassing Cloudflare / Captcha walls

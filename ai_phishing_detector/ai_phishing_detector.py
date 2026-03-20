@@ -144,7 +144,8 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
         "5_urgency_and_threats": "Identify manipulation tactics or undue urgency.",
         "6_content_specificity": "Evaluate relevance and authenticity of content.",
         "7_security_indicators": "Look for fraudulent security elements/badges.",
-        "8_url_analysis": "Analyze the domain, path, TLD abuse, and masquerading attempts."
+        "8_url_analysis": "Analyze the domain, path, TLD abuse, and masquerading attempts.",
+        "9_javascript_analysis": "Analyze any extracted scripts for obfuscation, credential stealing, or malicious actions."
       },
       "discrepancy_check": "Crucial cross-reference: Do visual elements contradict technical realities?",
       "key_threat_indicators": [
@@ -222,7 +223,8 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
         "3_url_and_redirect_analysis": "Compare the final URLs reached by both browsers to evaluate redirect behavior.",
         "4_browser_targeting_detection": "Identify if malicious content is served conditionally based on the user agent.",
         "5_evasion_technique_identification": "Identify browser fingerprinting, cloaking, or discriminative loading.",
-        "6_threat_assessment": "Determine which browser result is malicious and the threat vector severity."
+        "6_threat_assessment": "Determine which browser result is malicious and the threat vector severity.",
+        "7_javascript_analysis": "Analyze any extracted scripts for obfuscation, credential stealing, or malicious actions."
       },
       "key_threat_indicators": [
         "List specific evasion techniques detected"
@@ -474,42 +476,46 @@ async def extract_basic_dom_data(page):
     try:
         print("Extracting basic DOM information...")
         
-        # Enhanced link extraction - capture more than just <a> tags
-        links = await page.evaluate('''() => {
+        # Enhanced extraction - capture links, forms, and scripts
+        dom_data = await page.evaluate('''() => {
             const links = [];
+            const scriptBlobs = [];
             
             // Standard <a> tags
-            document.querySelectorAll('a[href]').forEach(el => {
-                links.push(el.href);
-            });
+            document.querySelectorAll('a[href]').forEach(el => links.push(el.href));
             
             // Forms with actions
-            document.querySelectorAll('form[action]').forEach(el => {
-                links.push(el.action);
-            });
+            document.querySelectorAll('form[action]').forEach(el => links.push(el.action));
             
             // Iframes (potential redirects)
-            document.querySelectorAll('iframe[src]').forEach(el => {
-                links.push(el.src);
-            });
+            document.querySelectorAll('iframe[src]').forEach(el => links.push(el.src));
             
             // Meta redirects
             document.querySelectorAll('meta[http-equiv="refresh"]').forEach(el => {
                 const content = el.getAttribute('content');
                 if (content && content.includes('url=')) {
-                    const url = content.split('url=')[1];
-                    links.push(url);
+                    links.push(content.split('url=')[1]);
                 }
             });
             
-            // Images (could be tracking pixels or suspicious)
+            // Images
             document.querySelectorAll('img[src]').forEach(el => {
-                if (el.src.startsWith('http')) {
-                    links.push(el.src);
+                if (el.src.startsWith('http')) links.push(el.src);
+            });
+            
+            // Extract inline scripts for deobfuscation
+            document.querySelectorAll('script:not([src])').forEach(el => {
+                const text = el.innerText.trim();
+                // Skip empty scripts or massive libraries (>10000 chars) to save tokens
+                if (text.length > 0 && text.length < 10000) {
+                    scriptBlobs.push(text);
                 }
             });
             
-            return [...new Set(links)]; // Remove duplicates
+            return {
+                links: [...new Set(links)],
+                scripts: scriptBlobs
+            };
         }''')
         
         # Form actions (keep separate for compatibility)
@@ -520,10 +526,11 @@ async def extract_basic_dom_data(page):
         # Get HTML content
         html_content = await page.content()
         
-        print(f"Basic DOM extraction successful: {len(links)} links, {len(forms)} forms")
+        print(f"Basic DOM extraction successful: {len(dom_data['links'])} links, {len(forms)} forms, {len(dom_data['scripts'])} scripts")
         
         return {
-            "links": links,
+            "links": dom_data['links'],
+            "scripts": dom_data['scripts'],
             "forms": forms,
             "html": html_content,
         }
@@ -532,6 +539,7 @@ async def extract_basic_dom_data(page):
         print(f"Basic DOM extraction failed: {e}")
         return {
             "links": [],
+            "scripts": [],
             "forms": [],
             "html": "",
         }
@@ -566,11 +574,12 @@ async def take_screenshot_with_context(browser, browser_type: str, user_agent: s
         dom_data = await extract_basic_dom_data(page)
         screenshot_bytes = await page.screenshot(full_page=True, type='png')
         
-        print(f"✅ {browser_type}: '{page_title[:30]}...', {len(dom_data['links'])} links, {len(dom_data['forms'])} forms")
+        print(f"✅ {browser_type}: '{page_title[:30]}...', {len(dom_data['links'])} links, {len(dom_data['forms'])} forms, {len(dom_data['scripts'])} scripts")
         
         result = {
             "screenshot": screenshot_bytes,
             "links": dom_data["links"],
+            "scripts": dom_data["scripts"],
             "forms": dom_data["forms"],
             "html": dom_data["html"],
             "title": page_title,
@@ -766,6 +775,7 @@ def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes
 **Page Title**: {data1.get('title', 'Unknown')}
 **Links Found**: {len(data1.get('links', []))} - {json.dumps(data1.get('links', [])[:15])}
 **Forms Found**: {len(data1.get('forms', []))} - {json.dumps(data1.get('forms', []))}
+**Scripts Found**: {len(data1.get('scripts', []))} - {json.dumps(data1.get('scripts', [])[:5])}
 **HTML Length**: {len(data1.get('html', ''))} characters
 
 ### Browser 2 Analysis: {data2.get('user_agent', 'Unknown')}
@@ -773,6 +783,7 @@ def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes
 **Page Title**: {data2.get('title', 'Unknown')}
 **Links Found**: {len(data2.get('links', []))} - {json.dumps(data2.get('links', [])[:15])}
 **Forms Found**: {len(data2.get('forms', []))} - {json.dumps(data2.get('forms', []))}
+**Scripts Found**: {len(data2.get('scripts', []))} - {json.dumps(data2.get('scripts', [])[:5])}
 **HTML Length**: {len(data2.get('html', ''))} characters
 
 ### Critical Comparison Points:
@@ -869,6 +880,7 @@ async def analyze_with_dual_ai(target_url: str, browser_results: dict, debug_mod
         "final_url": result1_data.get("final_url"),
         "title": result1_data.get("title"),
         "links": result1_data.get("links", []),
+        "scripts": result1_data.get("scripts", []),
         "forms": result1_data.get("forms", []),
         "html": result1_data.get("html", "")
     }
@@ -878,6 +890,7 @@ async def analyze_with_dual_ai(target_url: str, browser_results: dict, debug_mod
         "final_url": result2_data.get("final_url"),
         "title": result2_data.get("title"),
         "links": result2_data.get("links", []),
+        "scripts": result2_data.get("scripts", []),
         "forms": result2_data.get("forms", []),
         "html": result2_data.get("html", "")
     }
@@ -950,6 +963,7 @@ async def analyze_with_single_ai(target_url: str, browser_results: dict, debug_m
         target_url,
         {
             "links": best_data["links"],
+            "scripts": best_data.get("scripts", []),
             "forms": best_data["forms"], 
             "html": best_data["html"]
         },
@@ -1104,6 +1118,7 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
 
         # ENHANCED: Create comprehensive technical analysis section
         links = dom_data.get('links', [])
+        scripts = dom_data.get('scripts', [])
         forms = dom_data.get('forms', [])
         html_content = dom_data.get('html', '')
         
@@ -1119,10 +1134,13 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
             f"{f'[... and {len(links)-25} more links]' if len(links) > 25 else ''}\n\n"
             f"### 2. Form Actions Analysis ({len(forms)} found)\n"
             f"**Form Submission Targets**: {json.dumps(forms)}\n\n"
-            f"### 3. HTML Source Code Analysis\n"
+            f"### 3. JavaScript Extraction ({len(scripts)} found)\n"
+            f"**Inline Scripts**: {json.dumps(scripts[:5])}\n"
+            f"{f'[... and {len(scripts)-5} more script blocks]' if len(scripts) > 5 else ''}\n\n"
+            f"### 4. HTML Source Code Analysis\n"
             f"**Page HTML Structure** (cleaned for analysis):\n"
             f"```html\n{cleaned_html}\n```\n\n"
-            f"### 4. Cross-Reference Analysis Required\n"
+            f"### 5. Cross-Reference Analysis Required\n"
             f"**CRITICAL CHECKS**:\n"
             f"- Do the extracted links match what's visually presented in the screenshot?\n"
             f"- Are there hidden forms or links not visible in the screenshot?\n"
@@ -1131,7 +1149,7 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
             f"- Do legitimate-looking buttons actually link to malicious domains?\n"
             f"- Are there any obfuscated or suspicious JavaScript elements?\n"
             f"- Is the site impersonating another domain through HTML content?\n\n"
-            f"### 5. Domain Verification\n"
+            f"### 6. Domain Verification\n"
             f"**Current URL**: {webpage_url}\n"
             f"**Check for**:\n"
             f"- HTML references to different domains than the current URL\n"
@@ -1143,7 +1161,8 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
             f"2. **Hidden Elements**: Identify any suspicious elements in HTML that aren't visible in screenshot\n"
             f"3. **Link Destination Analysis**: Verify if visible buttons/links actually go where they claim\n"
             f"4. **Content Authenticity**: Check if HTML source matches the legitimate site it appears to impersonate\n"
-            f"5. **Sophisticated Techniques**: Look for advanced phishing techniques like iframe overlays, legitimate link mixing with malicious forms, etc.\n\n"
+            f"5. **Sophisticated Techniques**: Look for advanced phishing techniques like iframe overlays, legitimate link mixing with malicious forms, etc.\n"
+            f"6. **JavaScript Analysis**: De-obfuscate or analyze the extracted JavaScript blocks for suspicious intents.\n\n"
             f"**REMEMBER**: A single legitimate link (like google.com) does NOT make a phishing site legitimate. Focus on the overall context and any deceptive elements."
         )
 
@@ -1281,6 +1300,7 @@ if __name__ == "__main__":
                         print(f"6. Content Specificity: {detailed.get('6_content_specificity', 'N/A')}\n")
                         print(f"7. Security Indicators: {detailed.get('7_security_indicators', 'N/A')}\n")
                         print(f"8. URL Analysis: {detailed.get('8_url_analysis', 'N/A')}\n")
+                        print(f"9. JavaScript Analysis: {detailed.get('9_javascript_analysis', 'N/A')}\n")
                         print(f"⚖️ Discrepancy Check:\n{ai_data.get('discrepancy_check', 'N/A')}\n")
                     elif '1_screenshot_comparison' in detailed:
                         # Dual Browser Format
@@ -1290,6 +1310,7 @@ if __name__ == "__main__":
                         print(f"4. Browser Targeting: {detailed.get('4_browser_targeting_detection', 'N/A')}\n")
                         print(f"5. Evasion Techniques: {detailed.get('5_evasion_technique_identification', 'N/A')}\n")
                         print(f"6. Threat Assessment: {detailed.get('6_threat_assessment', 'N/A')}\n")
+                        print(f"7. JavaScript Analysis: {detailed.get('7_javascript_analysis', 'N/A')}\n")
                 elif 'step1_comparison_summary' in ai_data:
                     # Fallback for old Dual Browser payload
                     print(f"👁️‍🗨️ Comparison Summary:\n{ai_data.get('step1_comparison_summary', '')}\n")
