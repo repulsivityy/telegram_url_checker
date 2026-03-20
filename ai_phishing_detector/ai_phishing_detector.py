@@ -143,7 +143,7 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
         "List specific red flags found"
       ],
       "risk_level": "LOW", "MEDIUM", or "HIGH",
-      "final_assessment_summary": "Clear, concise 2-3 sentence explanation of the most critical factors."
+      "final_assessment_summary": "Clear, concise 2-4 sentence explanation of the most critical factors."
     }
 
     ### Risk Level Guidelines
@@ -215,7 +215,7 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
         "List specific evasion techniques detected"
       ],
       "risk_level": "LOW", "MEDIUM", or "HIGH",
-      "final_assessment_summary": "Clear, concise 2-3 sentence explanation focusing on browser differences and evasion techniques detected."
+      "final_assessment_summary": "Clear, concise 2-4 sentence explanation focusing on browser differences and evasion techniques detected."
     }
     
     ### Enhanced Risk Guidelines for Dual Analysis
