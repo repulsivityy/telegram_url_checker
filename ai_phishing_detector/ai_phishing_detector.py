@@ -7,7 +7,7 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version 2.4 - implemented json schema and browser agent concurrency for faster analysis
+# Version 2.4.1 - updated outputs to be more detailed if code is run directly
 #############
 
 import base64
@@ -136,9 +136,17 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
     You MUST output your ENTIRE response as a valid JSON object matching the exact schema below. Do not include markdown formatting, markdown blocks (like ```json), or any extra text outside the JSON.
 
     {
-      "step1_visual_analysis": "Describe the branding, design quality, and text visible in the screenshot.",
-      "step2_technical_analysis": "Summarize the HTML structure, form actions, and link destinations.",
-      "step3_discrepancy_check": "Compare visual and technical data. Detail any suspicious differences, hidden forms, or misleading domain actions.",
+      "detailed_analysis": {
+        "1_branding_consistency": "Evaluate branding, logos, colors, and impersonation attempts.",
+        "2_design_quality": "Assess layout, typography, and visual coherence.",
+        "3_textual_content": "Analyze text for urgent language, spelling errors, or data requests.",
+        "4_interactive_elements": "Verify forms and buttons vs. what they claim to do.",
+        "5_urgency_and_threats": "Identify manipulation tactics or undue urgency.",
+        "6_content_specificity": "Evaluate relevance and authenticity of content.",
+        "7_security_indicators": "Look for fraudulent security elements/badges.",
+        "8_url_analysis": "Analyze the domain, path, TLD abuse, and masquerading attempts."
+      },
+      "discrepancy_check": "Crucial cross-reference: Do visual elements contradict technical realities?",
       "key_threat_indicators": [
         "List specific red flags found"
       ],
@@ -208,9 +216,14 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
     You MUST output your ENTIRE response as a valid JSON object matching the exact schema below. Do not include markdown formatting, markdown blocks (like ```json), or any extra text outside the JSON.
     
     {
-      "step1_comparison_summary": "Start with a clear comparison: 'Comparing [Browser1] vs [Browser2] results...'",
-      "step2_key_differences": "List the specific differences found between the two results.",
-      "step3_evasion_assessment": "Determine if differences indicate malicious evasion or legitimate variation.",
+      "detailed_analysis": {
+        "1_screenshot_comparison": "Compare visuals between the browsers: are they identical or different? What elements differ?",
+        "2_content_structure_comparison": "Compare number/types of links, forms, and hidden HTML structures.",
+        "3_url_and_redirect_analysis": "Compare the final URLs reached by both browsers to evaluate redirect behavior.",
+        "4_browser_targeting_detection": "Identify if malicious content is served conditionally based on the user agent.",
+        "5_evasion_technique_identification": "Identify browser fingerprinting, cloaking, or discriminative loading.",
+        "6_threat_assessment": "Determine which browser result is malicious and the threat vector severity."
+      },
       "key_threat_indicators": [
         "List specific evasion techniques detected"
       ],
@@ -1233,12 +1246,82 @@ if __name__ == "__main__":
     
     try:
         print("Using smart hybrid dual browser analysis...")
-        analysis_result = asyncio.run(analyze_url_for_phishing(target_url))
+        # Enable debug flag so the terminal output retains full browser processing details too
+        analysis_result = asyncio.run(analyze_url_for_phishing(target_url, debug_mode=True))
+        
+        # Parse and pretty-print the JSON output when run directly from CLI
+        import json
+        import re
         
         print("\n" + "="*80)
-        print("ANALYSIS RESULTS")
+        print("🔍 DETAILED CLI PHISHING ASSESSMENT")
         print("="*80)
-        print(analysis_result)
         
+        # Check for JSON block in case it's mingled with debug text
+        json_match = re.search(r"\{.*\}", analysis_result, re.DOTALL)
+        if json_match:
+            try:
+                ai_data = json.loads(json_match.group(0))
+                
+                print(f"🚨 RISK LEVEL: {ai_data.get('risk_level', 'UNKNOWN').upper()}\n")
+                print(f"📝 SUMMARY:\n{ai_data.get('final_assessment_summary', 'No summary provided')}\n")
+                
+                print("--- 🕵️‍♂️ DETAILED ANALYSIS ---")
+                
+                # Check if this was a Single Browser detailed analysis
+                detailed = ai_data.get('detailed_analysis')
+                if detailed and isinstance(detailed, dict):
+                    if '1_branding_consistency' in detailed:
+                        # Single Browser Format
+                        print(f"1. Branding Consistency: {detailed.get('1_branding_consistency', 'N/A')}\n")
+                        print(f"2. Design Quality: {detailed.get('2_design_quality', 'N/A')}\n")
+                        print(f"3. Textual Content: {detailed.get('3_textual_content', 'N/A')}\n")
+                        print(f"4. Interactive Elements: {detailed.get('4_interactive_elements', 'N/A')}\n")
+                        print(f"5. Sense of Urgency/Threats: {detailed.get('5_urgency_and_threats', 'N/A')}\n")
+                        print(f"6. Content Specificity: {detailed.get('6_content_specificity', 'N/A')}\n")
+                        print(f"7. Security Indicators: {detailed.get('7_security_indicators', 'N/A')}\n")
+                        print(f"8. URL Analysis: {detailed.get('8_url_analysis', 'N/A')}\n")
+                        print(f"⚖️ Discrepancy Check:\n{ai_data.get('discrepancy_check', 'N/A')}\n")
+                    elif '1_screenshot_comparison' in detailed:
+                        # Dual Browser Format
+                        print(f"1. Screenshot Comparison: {detailed.get('1_screenshot_comparison', 'N/A')}\n")
+                        print(f"2. Content Structure: {detailed.get('2_content_structure_comparison', 'N/A')}\n")
+                        print(f"3. URL & Redirect Analysis: {detailed.get('3_url_and_redirect_analysis', 'N/A')}\n")
+                        print(f"4. Browser Targeting: {detailed.get('4_browser_targeting_detection', 'N/A')}\n")
+                        print(f"5. Evasion Techniques: {detailed.get('5_evasion_technique_identification', 'N/A')}\n")
+                        print(f"6. Threat Assessment: {detailed.get('6_threat_assessment', 'N/A')}\n")
+                elif 'step1_comparison_summary' in ai_data:
+                    # Fallback for old Dual Browser payload
+                    print(f"👁️‍🗨️ Comparison Summary:\n{ai_data.get('step1_comparison_summary', '')}\n")
+                    print(f"⚙️ Key Differences:\n{ai_data.get('step2_key_differences', '')}\n")
+                    print(f"⚖️ Evasion Assessment:\n{ai_data.get('step3_evasion_assessment', '')}\n")
+                else: 
+                    # Fallback for old/other schemas
+                    print(f"⚖️ Discrepancy Check:\n{ai_data.get('step3_discrepancy_check', '')}\n")
+                
+                indicators = ai_data.get("key_threat_indicators", [])
+                if indicators:
+                    print("🚩 KEY THREAT INDICATORS:")
+                    for ind in indicators:
+                        print(f"  - {ind}")
+                        
+                # Print debug info if present (generated by analyze_with_dual_ai)
+                if "SMART DUAL BROWSER ANALYSIS SUMMARY" in analysis_result:
+                    debug_text = analysis_result.split("SMART DUAL BROWSER ANALYSIS SUMMARY")[1]
+                    print("\n" + "="*60)
+                    print("SMART DUAL BROWSER ANALYSIS SUMMARY")
+                    print(debug_text.strip())
+                elif "SINGLE BROWSER ANALYSIS SUMMARY" in analysis_result:
+                    debug_text = analysis_result.split("SINGLE BROWSER ANALYSIS SUMMARY")[1]
+                    print("\n" + "="*60)
+                    print("SINGLE BROWSER ANALYSIS SUMMARY")
+                    print(debug_text.strip())
+                    
+            except json.JSONDecodeError:
+                print("⚠️ Failed to parse JSON. Printing raw output:\n")
+                print(analysis_result)
+        else:
+            print(analysis_result) # Fallback to raw text
+            
     except Exception as e:
         print(f"Script execution terminated due to an error: {e}")
