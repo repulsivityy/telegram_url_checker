@@ -83,10 +83,10 @@ The script provides:
 
 ## Roadmap utilising Playwright
 
-- [] Extract and De-obfuscate JavaScript Files
-- [] Network Request Interception (Catching the API endpoints!)
-- [] Iframe and Cloaking Unwrapping
-- [] Bypassing Cloudflare / Captcha walls
+- [ ] Extract and De-obfuscate JavaScript Files
+- [ ] Network Request Interception (Catching the API endpoints!)
+- [ ] Iframe and Cloaking Unwrapping
+- [ ] Bypassing Cloudflare / Captcha walls
 
 ## License
 
