@@ -449,7 +449,8 @@ class AIImageChecker(BaseChecker):
         pass
 
     def _parse_results(self, analysis_text: str) -> ScanResult:
-        """Parses the raw text output from the Gemini AI"""
+        """Parses the JSON structured output from the Gemini AI"""
+        import json
         logger.info(f"AI Analysis response received: {len(analysis_text)} characters")
         
         if not analysis_text:
@@ -461,24 +462,36 @@ class AIImageChecker(BaseChecker):
         if DEBUG_MODE:
             logger.info(f"AI Analysis in debug mode - response length: {len(analysis_text)} characters")
 
-        # Parse the risk assessment from the analysis
+        # Try to find JSON block in the response (handles markdown fencing and extra text)
+        json_match = re.search(r"\{.*\}", analysis_text, re.DOTALL)
+        if json_match:
+            try:
+                ai_data = json.loads(json_match.group(0))
+                risk_level = ai_data.get("risk_level", "UNKNOWN").lower()
+                reason = ai_data.get("final_assessment_summary", "No summary provided.")
+                is_malicious = risk_level == "high"
+                
+                # Truncate long reasons for cleaner display in telegram
+                if len(reason) > 400:
+                    reason = reason[:400] + "..."
+                
+                summary = f"Risk: {risk_level.capitalize()} - {reason}"
+                risk_factors = {"ai_risk": risk_level}
+                return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=details, risk_factors=risk_factors)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from AI response: {e}")
+                
+        # Fallback if AI didn't follow the exact JSON format or parsing failed
+        # Try original regex fallback just in case
         match = re.search(r"RISK ASSESSMENT:\s*\**\[?(Low|Medium|High)\]?\**\s*-\s*(.*)", analysis_text, re.IGNORECASE | re.DOTALL)
-
         if match:
             risk_level = match.group(1).lower()
-            reason = match.group(2).strip()
+            reason = match.group(2).strip()[:400]
             is_malicious = risk_level == "high" 
-            
-            # Truncate long reasons for cleaner display in telegram
-            if len(reason) > 400:
-                reason = reason[:400] + "..."
-            
             summary = f"Risk: {risk_level.capitalize()} - {reason}"
-            risk_factors = {"ai_risk": risk_level}
-            return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=details, risk_factors=risk_factors)
-    
-        # Fallback if the specific line isn't found
-        summary = "Could not determine risk level from AI response."
+            return ScanResult(is_malicious, summary, self.SOURCE_NAME, details=details, risk_factors={"ai_risk": risk_level})
+
+        summary = "Could not determine risk level from AI response (JSON parsing failed)."
         return ScanResult(False, summary, self.SOURCE_NAME, details=details, error=True)
 
     async def check(self, value: str, item_type: str) -> ScanResult:
