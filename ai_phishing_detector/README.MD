@@ -84,7 +84,7 @@ The script provides:
 ## Roadmap utilising Playwright
 
 - [X] Extract and De-obfuscate JavaScript Files
-- [ ] Network Request Interception (Catching the API endpoints!)
+- [X] Network Request Interception (Catching the API endpoints!)
 - [ ] Iframe and Cloaking Unwrapping
 - [ ] Bypassing Cloudflare / Captcha walls
 
@@ -95,8 +95,33 @@ This tool is provided for educational and research purposes. Use responsibly and
 
 > Example response:
 ```
-Enter URL: https://www.robiox.com.ua/communities/3226257580/xytthus-refund
-Sending dual analysis (2 screenshots + data) to Gemini API for 'https://www.robiox.com.ua/communities/3226257580/xytthus-refund'
+Enter URL: http://ghpert8njt.dh056139.top/
+Using smart hybrid dual browser analysis...
+🔍 Starting smart hybrid dual-browser phishing analysis for: http://ghpert8njt.dh056139.top/
+🔍 Debug mode enabled - will include technical browser details
+--------------------------------------------------------------------------------
+🔍 Starting dual-browser analysis for: http://ghpert8njt.dh056139.top/
+Testing 4 user agents concurrently across shared engines
+------------------------------------------------------------
+Taking screenshot with firefox: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0...
+Taking screenshot with chromium: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb...
+Taking screenshot with chromium: Mozilla/5.0 (Linux; Android 14; SM-G998B) AppleWeb...
+Taking screenshot with chromium: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Ap...
+Extracting basic DOM information...
+Basic DOM extraction successful: 6 links, 0 forms, 5 scripts
+✅ chromium: '导航>>>...', 6 links, 0 forms, 5 scripts, 0 network reqs
+Extracting basic DOM information...
+Basic DOM extraction successful: 6 links, 0 forms, 5 scripts
+✅ chromium: '导航>>>...', 6 links, 0 forms, 5 scripts, 0 network reqs
+Extracting basic DOM information...
+Basic DOM extraction successful: 6 links, 0 forms, 5 scripts
+✅ chromium: '导航>>>...', 6 links, 0 forms, 5 scripts, 0 network reqs
+Extracting basic DOM information...
+Basic DOM extraction successful: 6 links, 0 forms, 5 scripts
+✅ firefox: '导航>>>...', 6 links, 0 forms, 5 scripts, 0 network reqs
+🔍 Using DUAL AI analysis - Reason: Different final URLs: https://dqsapaxcse.dh056139.top/demo/ vs https://ackspbfyzm.dh056139.top/demo/; Different browser engines: firefox vs chromium
+📊 Dual analysis: firefox_windows vs chrome_windows
+Sending dual analysis (2 screenshots + data) to Gemini API for 'http://ghpert8njt.dh056139.top/'
 
 ================================================================================
 🔍 DETAILED CLI PHISHING ASSESSMENT
@@ -104,26 +129,31 @@ Sending dual analysis (2 screenshots + data) to Gemini API for 'https://www.robi
 🚨 RISK LEVEL: HIGH
 
 📝 SUMMARY:
-This is a highly convincing phishing site hosted on a typosquatted domain ('robiox.com.ua'). Both browser analysis results show identical malicious content, indicating a broad targeting strategy rather than browser-specific evasion. The site's primary goal is likely stealing Roblox user credentials through its fake login interface.
+The analyzed site is a highly suspicious portal that uses advanced evasion techniques, including script obfuscation and dynamic subdomain generation, to hide its content from security tools. The visual theme 'Money Tree' is commonly associated with fraudulent gambling or phishing schemes. The identical behavior across different browser sessions with varying subdomains confirms a sophisticated infrastructure designed for persistence and evasion.
 
 --- 🕵️‍♂️ DETAILED ANALYSIS ---
-1. Screenshot Comparison: The screenshots from both Firefox and Chrome are visually identical. Both display a page that meticulously mimics the official Roblox 'Communities' interface, featuring a group named 'xytthus refund'. Key elements like the navigation bar, 'Sign Up'/'Log In' buttons, and the group's layout are identical across both browsers.
+1. Screenshot Comparison: The screenshots from both browsers are visually identical. They show a landing page for '摇钱树资料网' (Money Tree Information Network) with three 'Access Entrance' links and a recommendation to download Google Chrome.
 
-2. Content Structure: The content structure is consistent between both browser captures. Both identified 35 links and 1 form. Crucially, all internal links (e.g., home, discover, login) point to the suspicious domain 'robiox.com.ua' rather than the legitimate 'roblox.com'. The HTML length difference is negligible (1 character), indicating identical code was served to both browsers.
+2. Content Structure: The HTML structure and length (9426 characters) are identical across both browsers. Both pages contain 6 links, three of which are internal PHP routes (/zd/jmup1.php, etc.) and one external link to the official Google Chrome download page in China.
 
-3. URL & Redirect Analysis: Both browsers reached the exact same final URL: 'https://www.robiox.com.ua/communities/3226257580/xytthus-refund#!/about'. There was no divergence in the redirection path between the two different browser/user-agent combinations.
+3. URL & Redirect Analysis: While the base domain 'dh056139.top' is consistent, the subdomains differ ('dqsapaxcse' for Firefox vs 'ackspbfyzm' for Chrome). This indicates the use of dynamically generated subdomains or a DGA (Domain Generation Algorithm) setup, which is a common evasion and tracking technique.
 
-4. Browser Targeting: There is no evidence of browser-specific targeting or content delivery based on the user agent. The site served the exact same phishing template to both Firefox and Chrome on Windows.
+4. Browser Targeting: The content itself does not vary between the two tested browsers. However, the explicit recommendation to download Google Chrome suggests that the operators may have optimized their subsequent malicious payloads or scams for the Chrome browser.
 
-5. Evasion Techniques: The primary evasion technique is domain typosquatting ('robiox.com.ua' instead of 'roblox.com'). The site uses a pixel-perfect visual clone of the legitimate service to deceive users. No sophisticated browser fingerprinting or conditional content loading was observed in this instance.
+5. Evasion Techniques: The site employs significant evasion techniques: 1) Heavy JavaScript obfuscation using string arrays and Base64 encoding to hide the page's actual text and link destinations from simple static analysis. 2) Dynamic subdomain generation. 3) Runtime content injection, where the main UI elements are rendered via script execution rather than being present in the initial HTML.
 
-6. Threat Assessment: The site is a high-fidelity phishing page designed for credential harvesting. By mimicking the Roblox login and community interface on a look-alike domain, it poses a significant threat to users who might not notice the subtle spelling difference in the URL.
+6. Threat Assessment: The risk is HIGH. The combination of heavy obfuscation, dynamic subdomains, and the nature of the content (gambling/lottery themed 'Money Tree' network) strongly suggests a malicious gateway or phishing portal designed to bypass security filters.
+
+7. JavaScript Analysis: Five scripts are present. Three scripts use a similar obfuscation pattern (hex-indexed string arrays like `_0x5b67`) to decode and inject the 'Access Entrance' blocks into the DOM. Another script (`daohang`) decodes Base64 strings to display the site name and footer information. This is a classic 'cloaking' technique.
+
+8. Network Analysis: No suspicious external network requests were captured during the initial load, as most actions are localized to the suspicious domain via relative paths.
 
 🚩 KEY THREAT INDICATORS:
-  - Typosquatted domain: 'robiox.com.ua' (mimicking roblox.com)
-  - Pixel-perfect replica of Roblox UI branding and layout
-  - Suspicious group theme ('refund' schemes are common phishing lures)
-  - All navigation links point to the malicious domain
+  - JavaScript obfuscation (hex arrays, Base64 decoding)
+  - Runtime DOM manipulation to hide content
+  - Dynamic subdomain generation (DGA-like behavior)
+  - Suspicious theme (Gambling/Get-rich-quick)
+  - Encouraging users to download specific software (Chrome)
 
 ============================================================
 SMART DUAL BROWSER ANALYSIS SUMMARY
@@ -131,20 +161,20 @@ SMART DUAL BROWSER ANALYSIS SUMMARY
 🔍 DUAL ANALYSIS TRIGGERED - Significant differences detected:
 
 🥇 Primary Result: firefox_windows (firefox)
-   • Title: 'xytthus refund - Roblox...'
-   • Final URL: https://www.robiox.com.ua/communities/3226257580/xytthus-refund#!/about
-   • Content: 35 links, 1 forms
+   • Title: '导航>>>...'
+   • Final URL: https://dqsapaxcse.dh056139.top/demo/
+   • Content: 6 links, 0 forms
 
 🥈 Secondary Result: chrome_windows (chromium)
-   • Title: 'xytthus refund - Roblox...'
-   • Final URL: https://www.robiox.com.ua/communities/3226257580/xytthus-refund#!/about
-   • Content: 35 links, 1 forms
+   • Title: '导航>>>...'
+   • Final URL: https://ackspbfyzm.dh056139.top/demo/
+   • Content: 6 links, 0 forms
 
 📋 All Browser Results:
-✅ firefox_windows (firefox): 'xytthus refund - Roblox...', 35 links, 1 forms
-✅ chrome_windows (chromium): 'xytthus refund - Roblox...', 35 links, 1 forms
-✅ chrome_android (chromium): 'xytthus refund - Roblox...', 35 links, 1 forms
-✅ chrome_mac (chromium): 'xytthus refund - Roblox...', 35 links, 1 forms
+✅ firefox_windows (firefox): '导航>>>...', 6 links, 0 forms
+✅ chrome_windows (chromium): '导航>>>...', 6 links, 0 forms
+✅ chrome_android (chromium): '导航>>>...', 6 links, 0 forms
+✅ chrome_mac (chromium): '导航>>>...', 6 links, 0 forms
 
 ⚠️ Dual analysis used due to significant browser differences.
 ```

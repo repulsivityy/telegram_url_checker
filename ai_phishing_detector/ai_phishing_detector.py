@@ -7,13 +7,14 @@
 #
 # Code is provided as best effort. Use at your own risk
 # Author: dominicchua@
-# Version 2.4.1 - updated outputs to be more detailed if code is run directly
+# Version 2.5 - Implemented AI Analysis for Network Requests (PATCH, PUT, POST)
 #############
 
 import base64
 import requests
 import json
 import os
+import urllib.parse
 from playwright.async_api import async_playwright
 import asyncio
 
@@ -145,7 +146,8 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
         "6_content_specificity": "Evaluate relevance and authenticity of content.",
         "7_security_indicators": "Look for fraudulent security elements/badges.",
         "8_url_analysis": "Analyze the domain, path, TLD abuse, and masquerading attempts.",
-        "9_javascript_analysis": "Analyze any extracted scripts for obfuscation, credential stealing, or malicious actions."
+        "9_javascript_analysis": "Analyze any extracted scripts for obfuscation, credential stealing, or malicious actions.",
+        "10_network_analysis": "Analyze the intercepted network requests for background API calls, tracking endpoints, and malicious C2 communications."
       },
       "discrepancy_check": "Crucial cross-reference: Do visual elements contradict technical realities?",
       "key_threat_indicators": [
@@ -224,7 +226,8 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
         "4_browser_targeting_detection": "Identify if malicious content is served conditionally based on the user agent.",
         "5_evasion_technique_identification": "Identify browser fingerprinting, cloaking, or discriminative loading.",
         "6_threat_assessment": "Determine which browser result is malicious and the threat vector severity.",
-        "7_javascript_analysis": "Analyze any extracted scripts for obfuscation, credential stealing, or malicious actions."
+        "7_javascript_analysis": "Analyze any extracted scripts for obfuscation, credential stealing, or malicious actions.",
+        "8_network_analysis": "Analyze intercepted network requests for silent data exfiltration or suspicious API backends."
       },
       "key_threat_indicators": [
         "List specific evasion techniques detected"
@@ -555,6 +558,40 @@ async def take_screenshot_with_context(browser, browser_type: str, user_agent: s
         context = await create_browser_context(browser, browser_type, user_agent, is_mobile)
         page = await context.new_page()
         
+        # Setup Network Interception
+        network_requests = []
+        
+        # Domains to filter out (to reduce noise and save context window)
+        ignored_domains = [
+            "ntp.org", "google.com", "google-analytics.com", "googletagmanager.com",
+            "office.com", "gstatic.com", "googleapis.com", "microsoft.com", 
+            "live.com", "applicationinsights.azure.com", "windows.net", "digicert.com",
+            "globalsign.com", "fbcdn.net", "facebook.com", "doubleclick.net"
+        ]
+        
+        def handle_request(request):
+            # 1. Only track POST & PUT requests to find data exfiltration (like password harvesting)
+            if request.method not in ["POST", "PUT", "PATCH"]:
+                return
+                
+            url = request.url
+            
+            # 2. Ignore massive base64 payloads and images
+            if url.startswith("data:") or request.resource_type in ["image", "media", "font"]:
+                return
+            
+            # 3. Ignore common legitimate services & telemetry to reduce noise
+            try:
+                domain = urllib.parse.urlparse(url).netloc.lower()
+                if any(ignored in domain for ignored in ignored_domains):
+                    return
+            except Exception:
+                pass
+                
+            network_requests.append(f"[{request.method}] {request.url} ({request.resource_type})")
+        
+        page.on("request", handle_request)
+        
         # Navigate
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -574,12 +611,13 @@ async def take_screenshot_with_context(browser, browser_type: str, user_agent: s
         dom_data = await extract_basic_dom_data(page)
         screenshot_bytes = await page.screenshot(full_page=True, type='png')
         
-        print(f"✅ {browser_type}: '{page_title[:30]}...', {len(dom_data['links'])} links, {len(dom_data['forms'])} forms, {len(dom_data['scripts'])} scripts")
+        print(f"✅ {browser_type}: '{page_title[:30]}...', {len(dom_data['links'])} links, {len(dom_data['forms'])} forms, {len(dom_data['scripts'])} scripts, {len(network_requests)} network reqs")
         
         result = {
             "screenshot": screenshot_bytes,
             "links": dom_data["links"],
             "scripts": dom_data["scripts"],
+            "network_requests": network_requests,
             "forms": dom_data["forms"],
             "html": dom_data["html"],
             "title": page_title,
@@ -776,6 +814,7 @@ def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes
 **Links Found**: {len(data1.get('links', []))} - {json.dumps(data1.get('links', [])[:15])}
 **Forms Found**: {len(data1.get('forms', []))} - {json.dumps(data1.get('forms', []))}
 **Scripts Found**: {len(data1.get('scripts', []))} - {json.dumps(data1.get('scripts', [])[:5])}
+**Network Requests**: {len(data1.get('network_requests', []))} - {json.dumps(data1.get('network_requests', [])[:25])}
 **HTML Length**: {len(data1.get('html', ''))} characters
 
 ### Browser 2 Analysis: {data2.get('user_agent', 'Unknown')}
@@ -784,6 +823,7 @@ def identify_with_gemini_dual(screenshot1_bytes: bytes, screenshot2_bytes: bytes
 **Links Found**: {len(data2.get('links', []))} - {json.dumps(data2.get('links', [])[:15])}
 **Forms Found**: {len(data2.get('forms', []))} - {json.dumps(data2.get('forms', []))}
 **Scripts Found**: {len(data2.get('scripts', []))} - {json.dumps(data2.get('scripts', [])[:5])}
+**Network Requests**: {len(data2.get('network_requests', []))} - {json.dumps(data2.get('network_requests', [])[:25])}
 **HTML Length**: {len(data2.get('html', ''))} characters
 
 ### Critical Comparison Points:
@@ -881,6 +921,7 @@ async def analyze_with_dual_ai(target_url: str, browser_results: dict, debug_mod
         "title": result1_data.get("title"),
         "links": result1_data.get("links", []),
         "scripts": result1_data.get("scripts", []),
+        "network_requests": result1_data.get("network_requests", []),
         "forms": result1_data.get("forms", []),
         "html": result1_data.get("html", "")
     }
@@ -891,6 +932,7 @@ async def analyze_with_dual_ai(target_url: str, browser_results: dict, debug_mod
         "title": result2_data.get("title"),
         "links": result2_data.get("links", []),
         "scripts": result2_data.get("scripts", []),
+        "network_requests": result2_data.get("network_requests", []),
         "forms": result2_data.get("forms", []),
         "html": result2_data.get("html", "")
     }
@@ -964,6 +1006,7 @@ async def analyze_with_single_ai(target_url: str, browser_results: dict, debug_m
         {
             "links": best_data["links"],
             "scripts": best_data.get("scripts", []),
+            "network_requests": best_data.get("network_requests", []),
             "forms": best_data["forms"], 
             "html": best_data["html"]
         },
@@ -1119,6 +1162,7 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
         # ENHANCED: Create comprehensive technical analysis section
         links = dom_data.get('links', [])
         scripts = dom_data.get('scripts', [])
+        network_requests = dom_data.get('network_requests', [])
         forms = dom_data.get('forms', [])
         html_content = dom_data.get('html', '')
         
@@ -1137,10 +1181,13 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
             f"### 3. JavaScript Extraction ({len(scripts)} found)\n"
             f"**Inline Scripts**: {json.dumps(scripts[:5])}\n"
             f"{f'[... and {len(scripts)-5} more script blocks]' if len(scripts) > 5 else ''}\n\n"
-            f"### 4. HTML Source Code Analysis\n"
+            f"### 4. Network Request Interception ({len(network_requests)} found)\n"
+            f"**Background API Calls & Trackers**: {json.dumps(network_requests[:25])}\n"
+            f"{f'[... and {len(network_requests)-25} more requests]' if len(network_requests) > 25 else ''}\n\n"
+            f"### 5. HTML Source Code Analysis\n"
             f"**Page HTML Structure** (cleaned for analysis):\n"
             f"```html\n{cleaned_html}\n```\n\n"
-            f"### 5. Cross-Reference Analysis Required\n"
+            f"### 6. Cross-Reference Analysis Required\n"
             f"**CRITICAL CHECKS**:\n"
             f"- Do the extracted links match what's visually presented in the screenshot?\n"
             f"- Are there hidden forms or links not visible in the screenshot?\n"
@@ -1148,8 +1195,9 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
             f"- Are there any suspicious redirects or iframe content?\n"
             f"- Do legitimate-looking buttons actually link to malicious domains?\n"
             f"- Are there any obfuscated or suspicious JavaScript elements?\n"
-            f"- Is the site impersonating another domain through HTML content?\n\n"
-            f"### 6. Domain Verification\n"
+            f"- Is the site impersonating another domain through HTML content?\n"
+            f"- Are there background API requests sending data to suspicious external endpoints (like Telegram API)?\n\n"
+            f"### 7. Domain Verification\n"
             f"**Current URL**: {webpage_url}\n"
             f"**Check for**:\n"
             f"- HTML references to different domains than the current URL\n"
@@ -1162,7 +1210,8 @@ def identify_with_gemini(image_bytes: bytes, webpage_url: str, dom_data: dict, p
             f"3. **Link Destination Analysis**: Verify if visible buttons/links actually go where they claim\n"
             f"4. **Content Authenticity**: Check if HTML source matches the legitimate site it appears to impersonate\n"
             f"5. **Sophisticated Techniques**: Look for advanced phishing techniques like iframe overlays, legitimate link mixing with malicious forms, etc.\n"
-            f"6. **JavaScript Analysis**: De-obfuscate or analyze the extracted JavaScript blocks for suspicious intents.\n\n"
+            f"6. **JavaScript Analysis**: De-obfuscate or analyze the extracted JavaScript blocks for suspicious intents.\n"
+            f"7. **Network Request Analysis**: Evaluate the intercepted network requests for API endpoints extracting data silently.\n\n"
             f"**REMEMBER**: A single legitimate link (like google.com) does NOT make a phishing site legitimate. Focus on the overall context and any deceptive elements."
         )
 
@@ -1301,6 +1350,7 @@ if __name__ == "__main__":
                         print(f"7. Security Indicators: {detailed.get('7_security_indicators', 'N/A')}\n")
                         print(f"8. URL Analysis: {detailed.get('8_url_analysis', 'N/A')}\n")
                         print(f"9. JavaScript Analysis: {detailed.get('9_javascript_analysis', 'N/A')}\n")
+                        print(f"10. Network Analysis: {detailed.get('10_network_analysis', 'N/A')}\n")
                         print(f"⚖️ Discrepancy Check:\n{ai_data.get('discrepancy_check', 'N/A')}\n")
                     elif '1_screenshot_comparison' in detailed:
                         # Dual Browser Format
@@ -1311,6 +1361,7 @@ if __name__ == "__main__":
                         print(f"5. Evasion Techniques: {detailed.get('5_evasion_technique_identification', 'N/A')}\n")
                         print(f"6. Threat Assessment: {detailed.get('6_threat_assessment', 'N/A')}\n")
                         print(f"7. JavaScript Analysis: {detailed.get('7_javascript_analysis', 'N/A')}\n")
+                        print(f"8. Network Analysis: {detailed.get('8_network_analysis', 'N/A')}\n")
                 elif 'step1_comparison_summary' in ai_data:
                     # Fallback for old Dual Browser payload
                     print(f"👁️‍🗨️ Comparison Summary:\n{ai_data.get('step1_comparison_summary', '')}\n")
