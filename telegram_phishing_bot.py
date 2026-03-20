@@ -19,7 +19,7 @@ Usage:
 4. Run the script: `python telegram_phishing_bot.py`.
 
 # author: dominicchua@
-# version: 2.2 - tweaked response and added more to debug filter
+# version: 2.3 - updated to use json schema
 """
 
 import os
@@ -604,7 +604,7 @@ class ResponseFormatter:
                     if not ai_result.error and ai_result.risk_factors.get("ai_risk") in ["low", "medium"]:
                         details_lines.append("<i>(AI verdict is informational and did not influence the final risk level)</i>")
             else:
-                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes ~45 - 60s to complete...")
+                details_lines.append("AI Analysis: ⏳ Still analyzing... It takes ~30 - 40s to complete...")
 
         details_section = "\n".join(filter(None, details_lines))
 
