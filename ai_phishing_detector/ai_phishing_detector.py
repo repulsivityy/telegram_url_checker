@@ -523,101 +523,120 @@ async def extract_basic_dom_data(page):
             "html": "",
         }
 
-async def take_screenshot_with_browser(url: str, browser_type: str, user_agent: str) -> dict:
+async def take_screenshot_with_context(browser, browser_type: str, user_agent: str, url: str) -> dict:
     """
-    Takes screenshot using specified browser type with proper configuration.
+    Takes screenshot using an already active browser instance (highly concurrent).
     """
     print(f"Taking screenshot with {browser_type}: {user_agent[:50]}...")
     
-    async with async_playwright() as p:
-        browser = await launch_browser_for_research(p, browser_type)
+    try:
+        is_mobile = "android" in user_agent.lower() or "mobile" in user_agent.lower()
+        context = await create_browser_context(browser, browser_type, user_agent, is_mobile)
+        page = await context.new_page()
         
+        # Navigate
         try:
-            is_mobile = "android" in user_agent.lower() or "mobile" in user_agent.lower()
-            context = await create_browser_context(browser, browser_type, user_agent, is_mobile)
-            page = await context.new_page()
-            
-            # Navigate
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            except Exception as nav_error:
-                print(f"Navigation error: {nav_error}")
-                await page.goto(url, wait_until="commit", timeout=30000)
-            
-            # Handle security warnings
-            await handle_security_warnings(page, browser_type)
-            
-            # Wait for content
-            await page.wait_for_timeout(3000)
-            
-            # Extract data
-            page_title = await page.title()
-            final_url = page.url
-            dom_data = await extract_basic_dom_data(page)
-            screenshot_bytes = await page.screenshot(full_page=True, type='png')
-            
-            print(f"✅ {browser_type}: '{page_title[:30]}...', {len(dom_data['links'])} links, {len(dom_data['forms'])} forms")
-            
-            result = {
-                "screenshot": screenshot_bytes,
-                "links": dom_data["links"],
-                "forms": dom_data["forms"],
-                "html": dom_data["html"],
-                "title": page_title,
-                "final_url": final_url,
-                "browser_type": browser_type,
-                "user_agent": user_agent
-            }
-            
-            await context.close()
-            return result
-            
-        finally:
-            await browser.close()
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        except Exception as nav_error:
+            print(f"Navigation error: {nav_error}")
+            await page.goto(url, wait_until="commit", timeout=30000)
+        
+        # Handle security warnings
+        await handle_security_warnings(page, browser_type)
+        
+        # Wait for content
+        await page.wait_for_timeout(3000)
+        
+        # Extract data
+        page_title = await page.title()
+        final_url = page.url
+        dom_data = await extract_basic_dom_data(page)
+        screenshot_bytes = await page.screenshot(full_page=True, type='png')
+        
+        print(f"✅ {browser_type}: '{page_title[:30]}...', {len(dom_data['links'])} links, {len(dom_data['forms'])} forms")
+        
+        result = {
+            "screenshot": screenshot_bytes,
+            "links": dom_data["links"],
+            "forms": dom_data["forms"],
+            "html": dom_data["html"],
+            "title": page_title,
+            "final_url": final_url,
+            "browser_type": browser_type,
+            "user_agent": user_agent
+        }
+        
+        await context.close()
+        return result
+        
+    except Exception as e:
+        print(f"❌ ({browser_type}) failed: {e}")
+        raise e
 
 async def analyze_with_dual_browsers(url: str, test_user_agents: list = None) -> dict:
     """
     Analyzes URL with multiple user agents concurrently across Firefox and Chromium.
+    Shares a core browser engine to ensure massive speed improvements.
     """
     if test_user_agents is None:
         # Use the default list from the configuration section
         test_user_agents = DEFAULT_USER_AGENTS
     
     print(f"🔍 Starting dual-browser analysis for: {url}")
-    print(f"Testing {len(test_user_agents)} user agents concurrently across Firefox and Chromium")
+    print(f"Testing {len(test_user_agents)} user agents concurrently across shared engines")
     print("-" * 60)
     
     results = {}
 
-    async def run_agent(ua_key):
-        if ua_key not in USER_AGENTS_WITH_BROWSERS:
-            print(f"Warning: Unknown user agent key '{ua_key}', skipping...")
-            return ua_key, None
-            
-        ua_config = USER_AGENTS_WITH_BROWSERS[ua_key]
-        user_agent = ua_config["user_agent"]
-        browser_type = ua_config["browser"]
-        
-        try:
-            result = await take_screenshot_with_browser(url, browser_type, user_agent)
-            return ua_key, result
-            
-        except Exception as e:
-            print(f"❌ {ua_key} ({browser_type}) failed: {e}")
-            return ua_key, {
-                "error": str(e), 
-                "user_agent": user_agent, 
-                "browser_type": browser_type
-            }
+    # Check which actual engines we need
+    needed_engines = set()
+    for ua_key in test_user_agents:
+        if ua_key in USER_AGENTS_WITH_BROWSERS:
+            needed_engines.add(USER_AGENTS_WITH_BROWSERS[ua_key]["browser"])
 
-    # Run all configured user agents concurrently
-    tasks = [run_agent(ua_key) for ua_key in test_user_agents]
-    completed_tasks = await asyncio.gather(*tasks)
-    
-    # Reassemble the results map
-    for ua_key, result in completed_tasks:
-        if result is not None:
-            results[ua_key] = result
+    async with async_playwright() as p:
+        # Launch only the engines we need, ONCE.
+        active_browsers = {}
+        if "chromium" in needed_engines:
+            active_browsers["chromium"] = await launch_browser_for_research(p, "chromium")
+        if "firefox" in needed_engines:
+            active_browsers["firefox"] = await launch_browser_for_research(p, "firefox")
+
+        try:
+            async def run_agent(ua_key):
+                if ua_key not in USER_AGENTS_WITH_BROWSERS:
+                    print(f"Warning: Unknown user agent key '{ua_key}', skipping...")
+                    return ua_key, None
+                    
+                ua_config = USER_AGENTS_WITH_BROWSERS[ua_key]
+                user_agent = ua_config["user_agent"]
+                browser_type = ua_config["browser"]
+                browser_instance = active_browsers[browser_type]
+                
+                try:
+                    result = await take_screenshot_with_context(browser_instance, browser_type, user_agent, url)
+                    return ua_key, result
+                except Exception as e:
+                    print(f"❌ {ua_key} ({browser_type}) failed: {e}")
+                    return ua_key, {
+                        "error": str(e), 
+                        "user_agent": user_agent, 
+                        "browser_type": browser_type
+                    }
+
+            # Run all configured user agents concurrently using the shared browser engines
+            tasks = [run_agent(ua_key) for ua_key in test_user_agents]
+            completed_tasks = await asyncio.gather(*tasks)
+            
+            # Reassemble the results map
+            for ua_key, result in completed_tasks:
+                if result is not None:
+                    results[ua_key] = result
+
+        finally:
+            # Clean up the single browser instances after all contexts are done
+            for browser_instance in active_browsers.values():
+                await browser_instance.close()
     
     return results
 
