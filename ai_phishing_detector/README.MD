@@ -81,12 +81,77 @@ The script provides:
 - **Playwright Host Dependencies (Linux)**: Missing system libraries (e.g., `libgtk-4.so.1`) require installation via your OS package manager (e.g., sudo apt-get install <package>)
 - **Installation Challenge**: If playwright install alone fails along with the dependencies, I had success running `npm init playwright@latest` first, then `playwright install`
 
+## Roadmap utilising Playwright
+
+- [] Extract and De-obfuscate JavaScript Files
+- [] Network Request Interception (Catching the API endpoints!)
+- [] Iframe and Cloaking Unwrapping
+- [] Bypassing Cloudflare / Captcha walls
+
 ## License
 
 This tool is provided for educational and research purposes. Use responsibly and in accordance with applicable laws and regulations.
 
 
 > Example response:
+```
+Enter URL: https://www.robiox.com.ua/communities/3226257580/xytthus-refund
+Sending dual analysis (2 screenshots + data) to Gemini API for 'https://www.robiox.com.ua/communities/3226257580/xytthus-refund'
+
+================================================================================
+🔍 DETAILED CLI PHISHING ASSESSMENT
+================================================================================
+🚨 RISK LEVEL: HIGH
+
+📝 SUMMARY:
+This is a highly convincing phishing site hosted on a typosquatted domain ('robiox.com.ua'). Both browser analysis results show identical malicious content, indicating a broad targeting strategy rather than browser-specific evasion. The site's primary goal is likely stealing Roblox user credentials through its fake login interface.
+
+--- 🕵️‍♂️ DETAILED ANALYSIS ---
+1. Screenshot Comparison: The screenshots from both Firefox and Chrome are visually identical. Both display a page that meticulously mimics the official Roblox 'Communities' interface, featuring a group named 'xytthus refund'. Key elements like the navigation bar, 'Sign Up'/'Log In' buttons, and the group's layout are identical across both browsers.
+
+2. Content Structure: The content structure is consistent between both browser captures. Both identified 35 links and 1 form. Crucially, all internal links (e.g., home, discover, login) point to the suspicious domain 'robiox.com.ua' rather than the legitimate 'roblox.com'. The HTML length difference is negligible (1 character), indicating identical code was served to both browsers.
+
+3. URL & Redirect Analysis: Both browsers reached the exact same final URL: 'https://www.robiox.com.ua/communities/3226257580/xytthus-refund#!/about'. There was no divergence in the redirection path between the two different browser/user-agent combinations.
+
+4. Browser Targeting: There is no evidence of browser-specific targeting or content delivery based on the user agent. The site served the exact same phishing template to both Firefox and Chrome on Windows.
+
+5. Evasion Techniques: The primary evasion technique is domain typosquatting ('robiox.com.ua' instead of 'roblox.com'). The site uses a pixel-perfect visual clone of the legitimate service to deceive users. No sophisticated browser fingerprinting or conditional content loading was observed in this instance.
+
+6. Threat Assessment: The site is a high-fidelity phishing page designed for credential harvesting. By mimicking the Roblox login and community interface on a look-alike domain, it poses a significant threat to users who might not notice the subtle spelling difference in the URL.
+
+🚩 KEY THREAT INDICATORS:
+  - Typosquatted domain: 'robiox.com.ua' (mimicking roblox.com)
+  - Pixel-perfect replica of Roblox UI branding and layout
+  - Suspicious group theme ('refund' schemes are common phishing lures)
+  - All navigation links point to the malicious domain
+
+============================================================
+SMART DUAL BROWSER ANALYSIS SUMMARY
+============================================================
+🔍 DUAL ANALYSIS TRIGGERED - Significant differences detected:
+
+🥇 Primary Result: firefox_windows (firefox)
+   • Title: 'xytthus refund - Roblox...'
+   • Final URL: https://www.robiox.com.ua/communities/3226257580/xytthus-refund#!/about
+   • Content: 35 links, 1 forms
+
+🥈 Secondary Result: chrome_windows (chromium)
+   • Title: 'xytthus refund - Roblox...'
+   • Final URL: https://www.robiox.com.ua/communities/3226257580/xytthus-refund#!/about
+   • Content: 35 links, 1 forms
+
+📋 All Browser Results:
+✅ firefox_windows (firefox): 'xytthus refund - Roblox...', 35 links, 1 forms
+✅ chrome_windows (chromium): 'xytthus refund - Roblox...', 35 links, 1 forms
+✅ chrome_android (chromium): 'xytthus refund - Roblox...', 35 links, 1 forms
+✅ chrome_mac (chromium): 'xytthus refund - Roblox...', 35 links, 1 forms
+
+⚠️ Dual analysis used due to significant browser differences.
+```
+
+---
+
+>OLD and Archived for reference
 ```bash
 Starting Firefox-based phishing detection process...
 Target URL: https://desk-app-now.com/lander/domain/ThaiBingo.exe
