@@ -23,7 +23,7 @@ import asyncio
 API_KEY = os.environ.get("GEMINI_APIKEY")
 if not API_KEY:
     raise ValueError("GEMINI_APIKEY environment variable not set. Please set it before running the script.")
-GEMINI_MODEL = "gemini-2.5-flash" # Model for image understanding
+GEMINI_MODEL = "gemini-3-flash-preview" # Model for image understanding
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
 # 1. Default user agents 
@@ -132,22 +132,24 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
     - Progressive credential harvesting techniques
     - Social engineering through legitimate-appearing elements
 
-    ## Response Requirements
+    ## Response Requirements (JSON)
+    You MUST output your ENTIRE response as a valid JSON object matching the exact schema below. Do not include markdown formatting, markdown blocks (like ```json), or any extra text outside the JSON.
 
-    ### Detailed Analysis
-    Provide a comprehensive evaluation addressing each point above. **Pay special attention to any discrepancies between visual appearance and technical reality.**
-
-    ### CRITICAL: Do not be misled by isolated legitimate elements
-    A phishing site may include some legitimate links or references to build credibility while still being malicious overall. Focus on the overall authenticity and whether the site is legitimately representing the brand it appears to show.
-
-    ## Risk Assessment Format
-    ### Conclude with exactly this format:
-    **RISK ASSESSMENT: Low/Medium/High - [Provide a clear, concise 2-3 sentence explanation that captures the key findings and reasoning. Focus on the most critical factors that led to your assessment. Maximum 400 characters.]**
+    {
+      "step1_visual_analysis": "Describe the branding, design quality, and text visible in the screenshot.",
+      "step2_technical_analysis": "Summarize the HTML structure, form actions, and link destinations.",
+      "step3_discrepancy_check": "Compare visual and technical data. Detail any suspicious differences, hidden forms, or misleading domain actions.",
+      "key_threat_indicators": [
+        "List specific red flags found"
+      ],
+      "risk_level": "LOW", "MEDIUM", or "HIGH",
+      "final_assessment_summary": "Clear, concise 2-3 sentence explanation of the most critical factors."
+    }
 
     ### Risk Level Guidelines
-    - **Low Risk**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
-    - **Medium Risk**: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing requiring further verification
-    - **High Risk**: Clear indicators of phishing/scam; obvious attempts at deception, brand impersonation, or technical elements that contradict visual presentation
+    - **LOW**: Professional appearance, consistent branding, no obvious red flags, legitimate URL structure, technical elements match visual presentation
+    - **MEDIUM**: Some concerning elements but not definitively malicious; could be legitimate site with issues or sophisticated phishing requiring further verification
+    - **HIGH**: Clear indicators of phishing/scam; obvious attempts at deception, brand impersonation, or technical elements that contradict visual presentation
 
     ## Additional Considerations
     - If uncertain, err on the side of caution and recommend verification through official channels
@@ -202,24 +204,24 @@ You are a cybersecurity AI assistant specialized in detecting phishing websites 
     - Is this sophisticated evasion or legitimate browser differences?
     - What is the primary threat vector being used?
     
-    ## Response Requirements
+    ## Response Requirements (JSON)
+    You MUST output your ENTIRE response as a valid JSON object matching the exact schema below. Do not include markdown formatting, markdown blocks (like ```json), or any extra text outside the JSON.
     
-    ### Comparison Summary
-    Start with a clear comparison: "DUAL BROWSER ANALYSIS: Comparing [Browser1] vs [Browser2] results..."
-    
-    ### Key Differences
-    List the specific differences found between the two results.
-    
-    ### Evasion Assessment
-    Determine if differences indicate malicious evasion or legitimate variation.
-    
-    ### Risk Assessment Format
-    **RISK ASSESSMENT: Low/Medium/High - [Provide a clear, concise 2-3 sentence explanation focusing on browser differences and evasion techniques detected. Maximum 300 characters.]**
+    {
+      "step1_comparison_summary": "Start with a clear comparison: 'Comparing [Browser1] vs [Browser2] results...'",
+      "step2_key_differences": "List the specific differences found between the two results.",
+      "step3_evasion_assessment": "Determine if differences indicate malicious evasion or legitimate variation.",
+      "key_threat_indicators": [
+        "List specific evasion techniques detected"
+      ],
+      "risk_level": "LOW", "MEDIUM", or "HIGH",
+      "final_assessment_summary": "Clear, concise 2-3 sentence explanation focusing on browser differences and evasion techniques detected."
+    }
     
     ### Enhanced Risk Guidelines for Dual Analysis
-    - **Low Risk**: Minor browser differences, similar content, no evasion detected
-    - **Medium Risk**: Some differences present but could be legitimate browser variations
-    - **High Risk**: Clear evasion detected, different malicious vs legitimate content, sophisticated targeting
+    - **LOW**: Minor browser differences, similar content, no evasion detected
+    - **MEDIUM**: Some differences present but could be legitimate browser variations
+    - **HIGH**: Clear evasion detected, different malicious vs legitimate content, sophisticated targeting
     
     Remember: The presence of browser-specific differences in phishing contexts is often a strong indicator of sophisticated evasion techniques.
     
